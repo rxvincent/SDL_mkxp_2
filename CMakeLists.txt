@@ -502,6 +502,8 @@ set_option(SDL_INSTALL_TESTS   "Install test-cases" OFF)
 
 set(HAVE_STATIC_PIC "${SDL_STATIC_PIC}")
 
+set(SDL_KMSDRM ON)
+
 if(SDL_HIDAPI)
   if(HIDAPI_ONLY_LIBUSB)
     set(SDL_HIDAPI_LIBUSB ON CACHE BOOL "" FORCE)
