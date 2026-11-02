@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2024 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -20,9 +20,9 @@
 */
 #include "SDL_internal.h"
 
-/* D3D12 shader implementation */
+// D3D12 shader implementation
 
-/* Set up for C function definitions, even when using C++ */
+// Set up for C function definitions, even when using C++
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -30,6 +30,7 @@ extern "C" {
 typedef enum
 {
     SHADER_SOLID,
+    SHADER_SOLID_PQ,
     SHADER_RGB,
     SHADER_ADVANCED,
     NUM_SHADERS
@@ -48,7 +49,7 @@ extern void D3D12_GetPixelShader(D3D12_Shader shader, D3D12_SHADER_BYTECODE *out
 extern D3D12_RootSignature D3D12_GetRootSignatureType(D3D12_Shader shader);
 extern void D3D12_GetRootSignatureData(D3D12_RootSignature rootSig, D3D12_SHADER_BYTECODE *outBytecode);
 
-/* Ends C function definitions when using C++ */
+// Ends C function definitions when using C++
 #ifdef __cplusplus
 }
 #endif

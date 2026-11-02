@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2024 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -20,26 +20,28 @@
 */
 
 #include "SDL_internal.h"
+#include "../SDL_dialog.h"
 #include "../../core/android/SDL_android.h"
 
-void SDLCALL SDL_ShowOpenFileDialog(SDL_DialogFileCallback callback, void *userdata, SDL_Window *window, const SDL_DialogFileFilter *filters, const char *default_location, SDL_bool allow_many)
+#ifndef SDL_DIALOG_DISABLED
+
+void SDL_SYS_ShowFileDialogWithProperties(SDL_FileDialogType type, SDL_DialogFileCallback callback, void *userdata, SDL_PropertiesID props)
 {
-    if (!Android_JNI_OpenFileDialog(callback, userdata, filters, SDL_FALSE, allow_many)) {
-        /* SDL_SetError is already called when it fails */
+    SDL_DialogFileFilter *filters = SDL_GetPointerProperty(props, SDL_PROP_FILE_DIALOG_FILTERS_POINTER, NULL);
+    int nfilters = (int) SDL_GetNumberProperty(props, SDL_PROP_FILE_DIALOG_NFILTERS_NUMBER, 0);
+    bool allow_many = SDL_GetBooleanProperty(props, SDL_PROP_FILE_DIALOG_MANY_BOOLEAN, false);
+    const char *base_folder = SDL_GetStringProperty(props, SDL_PROP_FILE_DIALOG_LOCATION_STRING, NULL);
+
+    if (SDL_GetHint(SDL_HINT_FILE_DIALOG_DRIVER) != NULL) {
+        SDL_SetError("File dialog driver unsupported (don't set SDL_HINT_FILE_DIALOG_DRIVER)");
+        callback(userdata, NULL, -1);
+        return;
+    }
+
+    if (!Android_JNI_ShowFileDialog(callback, userdata, filters, nfilters, type, allow_many, base_folder)) {
+        // SDL_SetError is already called when it fails
         callback(userdata, NULL, -1);
     }
 }
 
-void SDLCALL SDL_ShowSaveFileDialog(SDL_DialogFileCallback callback, void *userdata, SDL_Window *window, const SDL_DialogFileFilter *filters, const char *default_location)
-{
-    if (!Android_JNI_OpenFileDialog(callback, userdata, filters, SDL_TRUE, SDL_FALSE)) {
-        /* SDL_SetError is already called when it fails */
-        callback(userdata, NULL, -1);
-    }
-}
-
-void SDLCALL SDL_ShowOpenFolderDialog(SDL_DialogFileCallback callback, void *userdata, SDL_Window *window, const char *default_location, SDL_bool allow_many)
-{
-    SDL_Unsupported();
-    callback(userdata, NULL, -1);
-}
+#endif // !SDL_DIALOG_DISABLED

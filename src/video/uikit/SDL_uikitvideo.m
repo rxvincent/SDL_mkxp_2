@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2024 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -23,6 +23,7 @@
 #ifdef SDL_VIDEO_DRIVER_UIKIT
 
 #import <UIKit/UIKit.h>
+#import <GameController/GameController.h>
 
 #include "../SDL_sysvideo.h"
 #include "../SDL_pixels_c.h"
@@ -37,6 +38,7 @@
 #include "SDL_uikitvulkan.h"
 #include "SDL_uikitmetalview.h"
 #include "SDL_uikitmessagebox.h"
+#include "SDL_uikitpen.h"
 
 #define UIKITVID_DRIVER_NAME "uikit"
 
@@ -44,17 +46,17 @@
 
 @end
 
-/* Initialization/Query functions */
-static int UIKit_VideoInit(SDL_VideoDevice *_this);
+// Initialization/Query functions
+static bool UIKit_VideoInit(SDL_VideoDevice *_this);
 static void UIKit_VideoQuit(SDL_VideoDevice *_this);
 
-/* DUMMY driver bootstrap functions */
+// DUMMY driver bootstrap functions
 
 static void UIKit_DeleteDevice(SDL_VideoDevice *device)
 {
     @autoreleasepool {
-        if (device->driverdata){
-            CFRelease(device->driverdata);
+        if (device->internal){
+            CFRelease(device->internal);
         }
         SDL_free(device);
     }
@@ -66,7 +68,7 @@ static SDL_VideoDevice *UIKit_CreateDevice(void)
         SDL_VideoDevice *device;
         SDL_UIKitVideoData *data;
 
-        /* Initialize all variables that we clean on shutdown */
+        // Initialize all variables that we clean on shutdown
         device = (SDL_VideoDevice *)SDL_calloc(1, sizeof(SDL_VideoDevice));
         if (!device) {
             return NULL;
@@ -74,10 +76,10 @@ static SDL_VideoDevice *UIKit_CreateDevice(void)
 
         data = [SDL_UIKitVideoData new];
 
-        device->driverdata = (SDL_VideoData *)CFBridgingRetain(data);
+        device->internal = (SDL_VideoData *)CFBridgingRetain(data);
         device->system_theme = UIKit_GetSystemTheme();
 
-        /* Set the function pointers */
+        // Set the function pointers
         device->VideoInit = UIKit_VideoInit;
         device->VideoQuit = UIKit_VideoQuit;
         device->GetDisplayModes = UIKit_GetDisplayModes;
@@ -86,6 +88,7 @@ static SDL_VideoDevice *UIKit_CreateDevice(void)
         device->SuspendScreenSaver = UIKit_SuspendScreenSaver;
         device->CreateSDLWindow = UIKit_CreateWindow;
         device->SetWindowTitle = UIKit_SetWindowTitle;
+        device->SetWindowSize = UIKit_SetWindowSize;
         device->ShowWindow = UIKit_ShowWindow;
         device->HideWindow = UIKit_HideWindow;
         device->RaiseWindow = UIKit_RaiseWindow;
@@ -97,22 +100,22 @@ static SDL_VideoDevice *UIKit_CreateDevice(void)
 
 #ifdef SDL_IPHONE_KEYBOARD
         device->HasScreenKeyboardSupport = UIKit_HasScreenKeyboardSupport;
-        device->ShowScreenKeyboard = UIKit_ShowScreenKeyboard;
-        device->HideScreenKeyboard = UIKit_HideScreenKeyboard;
-        device->IsScreenKeyboardShown = UIKit_IsScreenKeyboardShown;
-        device->SetTextInputRect = UIKit_SetTextInputRect;
+        device->StartTextInput = UIKit_StartTextInput;
+        device->StopTextInput = UIKit_StopTextInput;
+        device->SetTextInputProperties = UIKit_SetTextInputProperties;
+        device->UpdateTextInputArea = UIKit_UpdateTextInputArea;
 #endif
 
         device->SetClipboardText = UIKit_SetClipboardText;
         device->GetClipboardText = UIKit_GetClipboardText;
         device->HasClipboardText = UIKit_HasClipboardText;
 
-        /* OpenGL (ES) functions */
+        // OpenGL (ES) functions
 #if defined(SDL_VIDEO_OPENGL_ES) || defined(SDL_VIDEO_OPENGL_ES2)
         device->GL_MakeCurrent = UIKit_GL_MakeCurrent;
         device->GL_SwapWindow = UIKit_GL_SwapWindow;
         device->GL_CreateContext = UIKit_GL_CreateContext;
-        device->GL_DeleteContext = UIKit_GL_DeleteContext;
+        device->GL_DestroyContext = UIKit_GL_DestroyContext;
         device->GL_GetProcAddress = UIKit_GL_GetProcAddress;
         device->GL_LoadLibrary = UIKit_GL_LoadLibrary;
 #endif
@@ -143,43 +146,53 @@ static SDL_VideoDevice *UIKit_CreateDevice(void)
 VideoBootStrap UIKIT_bootstrap = {
     UIKITVID_DRIVER_NAME, "SDL UIKit video driver",
     UIKit_CreateDevice,
-    UIKit_ShowMessageBox
+    UIKit_ShowMessageBox,
+    false
 };
 
-int UIKit_VideoInit(SDL_VideoDevice *_this)
+static bool UIKit_VideoInit(SDL_VideoDevice *_this)
 {
     _this->gl_config.driver_loaded = 1;
 
-    if (UIKit_InitModes(_this) < 0) {
-        return -1;
+    if (!UIKit_InitModes(_this)) {
+        return false;
     }
 
     SDL_InitGCKeyboard();
     SDL_InitGCMouse();
 
-    return 0;
+    UIKit_InitClipboard(_this);
+
+    UIKit_InitWindowFocus();
+
+    return true;
 }
 
-void UIKit_VideoQuit(SDL_VideoDevice *_this)
+static void UIKit_VideoQuit(SDL_VideoDevice *_this)
 {
+    UIKit_QuitWindowFocus();
+
+    UIKit_QuitClipboard(_this);
+
     SDL_QuitGCKeyboard();
     SDL_QuitGCMouse();
+    UIKit_QuitPen(_this);
 
     UIKit_QuitModes(_this);
 }
 
-int UIKit_SuspendScreenSaver(SDL_VideoDevice *_this)
+bool UIKit_SuspendScreenSaver(SDL_VideoDevice *_this)
 {
     @autoreleasepool {
         UIApplication *app = [UIApplication sharedApplication];
 
-        /* Prevent the display from dimming and going to sleep. */
-        app.idleTimerDisabled = (_this->suspend_screensaver != SDL_FALSE);
+        // Prevent the display from dimming and going to sleep.
+        app.idleTimerDisabled = (_this->suspend_screensaver != false);
     }
-    return 0;
+    return true;
 }
 
-SDL_bool UIKit_IsSystemVersionAtLeast(double version)
+bool UIKit_IsSystemVersionAtLeast(double version)
 {
     return [[UIDevice currentDevice].systemVersion doubleValue] >= version;
 }
@@ -202,13 +215,16 @@ SDL_SystemTheme UIKit_GetSystemTheme(void)
 }
 
 #ifdef SDL_PLATFORM_VISIONOS
-CGRect UIKit_ComputeViewFrame(SDL_Window *window){
-    return CGRectMake(window->x, window->y, window->w, window->h);
+CGRect UIKit_ComputeViewFrame(SDL_Window *window)
+{
+    // View origin is always (0,0) relative to the UIWindow.
+    // window->x/y are screen-level positions (often SDL_WINDOWPOS_UNDEFINED).
+    return CGRectMake(0, 0, window->w, window->h);
 }
 #else
 CGRect UIKit_ComputeViewFrame(SDL_Window *window, UIScreen *screen)
 {
-    SDL_UIKitWindowData *data = (__bridge SDL_UIKitWindowData *)window->driverdata;
+    SDL_UIKitWindowData *data = (__bridge SDL_UIKitWindowData *)window->internal;
     CGRect frame = screen.bounds;
 
     /* Use the UIWindow bounds instead of the UIScreen bounds, when possible.
@@ -226,44 +242,191 @@ CGRect UIKit_ComputeViewFrame(SDL_Window *window, UIScreen *screen)
      * This is a workaround until a better solution can be found.
      * https://bugzilla.libsdl.org/show_bug.cgi?id=3505
      * https://bugzilla.libsdl.org/show_bug.cgi?id=3465
-     * https://forums.developer.apple.com/thread/65337 */
-    UIInterfaceOrientation orient = [UIApplication sharedApplication].statusBarOrientation;
-    BOOL landscape = UIInterfaceOrientationIsLandscape(orient) ||
-                    !(UIKit_GetSupportedOrientations(window) & (UIInterfaceOrientationMaskPortrait | UIInterfaceOrientationMaskPortraitUpsideDown));
-    BOOL fullscreen = CGRectEqualToRect(screen.bounds, frame);
+     * https://forums.developer.apple.com/thread/65337
+     *
+     * On iOS 13 and newer the window bounds match the interface orientation,
+     * which may not be known yet at launch, and iPadOS 26 doesn't let resizable
+     * applications lock the orientation, so we use the window bounds as-is there.
+     */
+    if (!UIKit_IsSystemVersionAtLeast(13.0)) {
+        UIInterfaceOrientation orientation = UIKit_GetInterfaceOrientation();
+        BOOL landscape = UIInterfaceOrientationIsLandscape(orientation) ||
+                         !(UIKit_GetSupportedOrientations(window) & (UIInterfaceOrientationMaskPortrait | UIInterfaceOrientationMaskPortraitUpsideDown));
+        BOOL fullscreen = CGRectEqualToRect(screen.bounds, frame);
 
-    /* The orientation flip doesn't make sense when the window is smaller
-     * than the screen (iPad Split View, for example). */
-    if (fullscreen && (landscape != (frame.size.width > frame.size.height))) {
-        float height = frame.size.width;
-        frame.size.width = frame.size.height;
-        frame.size.height = height;
+        /* The orientation flip doesn't make sense when the window is smaller
+         * than the screen (iPad Split View, for example). */
+        if (fullscreen && (landscape != (frame.size.width > frame.size.height))) {
+            float height = frame.size.width;
+            frame.size.width = frame.size.height;
+            frame.size.height = height;
+        }
     }
 #endif
 
     return frame;
 }
+#endif // SDL_PLATFORM_VISIONOS
 
+#if !defined(SDL_PLATFORM_TVOS) && !defined(SDL_PLATFORM_VISIONOS)
+UIInterfaceOrientation UIKit_GetInterfaceOrientation(void)
+{
+#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 270000
+    if (@available(iOS 27.0, *)) {
+        UIWindowScene *windowScene = UIKit_GetActiveWindowScene();
+        if (windowScene != nil) {
+            return windowScene.effectiveGeometry.interfaceOrientation;
+        }
+        return UIInterfaceOrientationUnknown;
+    }
 #endif
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    return [UIApplication sharedApplication].statusBarOrientation;
+#pragma clang diagnostic pop
+}
+#endif // !SDL_PLATFORM_TVOS && !SDL_PLATFORM_VISIONOS
+
+#ifndef SDL_PLATFORM_VISIONOS
+// Find a foreground scene, optionally on a specific screen and a specific role, preferring an active one.
+static UIWindowScene *UIKit_FindForegroundWindowScene(UIScreen *screen, NSString *role) API_AVAILABLE(ios(13.0), tvos(13.0));
+static UIWindowScene *UIKit_FindForegroundWindowScene(UIScreen *screen, NSString *role)
+{
+    NSSet<UIScene *> *connectedScenes = [UIApplication sharedApplication].connectedScenes;
+    UIWindowScene *foregroundScene = nil;
+
+    for (UIScene *scene in connectedScenes) {
+        if (![scene isKindOfClass:[UIWindowScene class]]) {
+            continue;
+        }
+
+        UIWindowScene *windowScene = (UIWindowScene *)scene;
+        if (screen && windowScene.screen != screen) {
+            continue;
+        }
+        if (role && ![windowScene.session.role isEqualToString:role]) {
+            continue;
+        }
+
+        if (windowScene.activationState == UISceneActivationStateForegroundActive) {
+            foregroundScene = windowScene;
+            break;
+        }
+        if (windowScene.activationState == UISceneActivationStateForegroundInactive && !foregroundScene) {
+            foregroundScene = windowScene;
+        }
+    }
+    return foregroundScene;
+}
+
+UIWindowScene *UIKit_GetWindowSceneForScreen(UIScreen *screen)
+{
+    if (@available(iOS 13.0, tvOS 13.0, *)) {
+        return UIKit_FindForegroundWindowScene(screen, nil);
+    }
+    return nil;
+}
+#endif // !SDL_PLATFORM_VISIONOS
+
+UIWindowScene *UIKit_GetActiveWindowScene(void)
+{
+    if (@available(iOS 13.0, tvOS 13.0, *)) {
+#ifndef SDL_PLATFORM_VISIONOS
+        // Return the application scene, if possible
+        UIWindowScene *applicationScene = UIKit_FindForegroundWindowScene(nil, UIWindowSceneSessionRoleApplication);
+        if (applicationScene) {
+            return applicationScene;
+        }
+#endif
+
+        NSSet<UIScene *> *connectedScenes = [UIApplication sharedApplication].connectedScenes;
+
+        // First, try to find an active foreground scene
+        for (UIScene *scene in connectedScenes) {
+            if ([scene isKindOfClass:[UIWindowScene class]]) {
+                UIWindowScene *windowScene = (UIWindowScene *)scene;
+                if (windowScene.activationState == UISceneActivationStateForegroundActive) {
+                    return windowScene;
+                }
+            }
+        }
+
+        // If no active scene, return any foreground scene
+        for (UIScene *scene in connectedScenes) {
+            if ([scene isKindOfClass:[UIWindowScene class]]) {
+                UIWindowScene *windowScene = (UIWindowScene *)scene;
+                if (windowScene.activationState == UISceneActivationStateForegroundInactive) {
+                    return windowScene;
+                }
+            }
+        }
+
+        // Last resort: return first window scene
+        for (UIScene *scene in connectedScenes) {
+            if ([scene isKindOfClass:[UIWindowScene class]]) {
+                return (UIWindowScene *)scene;
+            }
+        }
+    }
+
+    return nil;
+}
+
+void UIKit_SetGameControllerInteraction(bool enabled)
+{
+    if (@available(iOS 13.0, tvOS 13.0, *)) {
+        NSSet<UIScene *> *connectedScenes = [UIApplication sharedApplication].connectedScenes;
+        for (UIScene *scene in connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) {
+                continue;
+            }
+
+            UIWindowScene *windowScene = (UIWindowScene *)scene;
+            for (UIWindow *window in windowScene.windows) {
+                UIKit_SetViewGameControllerInteraction(window, enabled);
+            }
+        }
+    }
+}
+
+void UIKit_SetViewGameControllerInteraction(UIView *view, bool enabled)
+{
+#if defined(SDL_PLATFORM_VISIONOS) || \
+       (defined(SDL_PLATFORM_IOS) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 180000)
+    if (@available(iOS 18.0, visionOS 2.0, *)) {
+        if (enabled) {
+            GCEventInteraction *interaction = [[GCEventInteraction alloc] init];
+            interaction.handledEventTypes = GCUIEventTypeGamepad;
+            [view addInteraction:interaction];
+        } else {
+            for (id<UIInteraction> entry in view.interactions) {
+                if ([entry isKindOfClass:[GCEventInteraction class]]) {
+                    GCEventInteraction *interaction = (GCEventInteraction *)entry;
+                    if (interaction.handledEventTypes == GCUIEventTypeGamepad) {
+                        [view removeInteraction:interaction];
+                        break;
+                    }
+                }
+            }
+        }
+    }
+#endif // !SDL_PLATFORM_TVOS
+}
 
 void UIKit_ForceUpdateHomeIndicator(void)
 {
 #ifndef SDL_PLATFORM_TVOS
-    /* Force the main SDL window to re-evaluate home indicator state */
+    // Force the main SDL window to re-evaluate home indicator state
     SDL_Window *focus = SDL_GetKeyboardFocus();
     if (focus) {
-        SDL_UIKitWindowData *data = (__bridge SDL_UIKitWindowData *)focus->driverdata;
+        SDL_UIKitWindowData *data = (__bridge SDL_UIKitWindowData *)focus->internal;
         if (data != nil) {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wunguarded-availability-new"
-            if ([data.viewcontroller respondsToSelector:@selector(setNeedsUpdateOfHomeIndicatorAutoHidden)]) {
-                [data.viewcontroller performSelectorOnMainThread:@selector(setNeedsUpdateOfHomeIndicatorAutoHidden) withObject:nil waitUntilDone:NO];
-                [data.viewcontroller performSelectorOnMainThread:@selector(setNeedsUpdateOfScreenEdgesDeferringSystemGestures) withObject:nil waitUntilDone:NO];
-            }
-#pragma clang diagnostic pop
+            [data.viewcontroller performSelectorOnMainThread:@selector(setNeedsUpdateOfHomeIndicatorAutoHidden) withObject:nil waitUntilDone:NO];
+            [data.viewcontroller performSelectorOnMainThread:@selector(setNeedsUpdateOfScreenEdgesDeferringSystemGestures) withObject:nil waitUntilDone:NO];
         }
     }
-#endif /* !SDL_PLATFORM_TVOS */
+#endif // !SDL_PLATFORM_TVOS
 }
 
 /*
@@ -282,25 +445,42 @@ void SDL_NSLog(const char *prefix, const char *text)
 {
     @autoreleasepool {
         NSString *nsText = [NSString stringWithUTF8String:text];
-        if (prefix) {
+        if (prefix && *prefix) {
             NSString *nsPrefix = [NSString stringWithUTF8String:prefix];
-            NSLog(@"%@: %@", nsPrefix, nsText);
+            NSLog(@"%@%@", nsPrefix, nsText);
         } else {
             NSLog(@"%@", nsText);
         }
     }
 }
-#endif /* SDL_VIDEO_DRIVER_COCOA */
+#endif // SDL_VIDEO_DRIVER_COCOA
 
 /*
- * iOS Tablet detection
+ * iOS Tablet, etc, detection
  *
  * This doesn't really have anything to do with the interfaces of the SDL video
  * subsystem, but we need to stuff this into an Objective-C source code file.
  */
-SDL_bool SDL_IsIPad(void)
+
+SDL_FormFactor SDL_GetUIKitDeviceFormFactor(void)
 {
-    return ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad);
+    // TODO: Apple Watch
+    switch ([UIDevice currentDevice].userInterfaceIdiom) {
+    case UIUserInterfaceIdiomPhone:
+        return SDL_FORMFACTOR_PHONE;
+    case UIUserInterfaceIdiomPad:
+        return SDL_FORMFACTOR_TABLET;
+    case UIUserInterfaceIdiomTV:
+        return SDL_FORMFACTOR_TV;
+    case UIUserInterfaceIdiomCarPlay:
+        return SDL_FORMFACTOR_CAR;
+    case UIUserInterfaceIdiomMac:
+        return SDL_FORMFACTOR_DESKTOP;
+    case UIUserInterfaceIdiomVision:
+        return SDL_FORMFACTOR_HEADSET;
+    default:
+        return SDL_FORMFACTOR_UNKNOWN;
+    }
 }
 
-#endif /* SDL_VIDEO_DRIVER_UIKIT */
+#endif // SDL_VIDEO_DRIVER_UIKIT

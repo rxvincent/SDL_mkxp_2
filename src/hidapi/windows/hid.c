@@ -45,7 +45,7 @@ typedef LONG NTSTATUS;
 #define _WIN32_WINNT_WIN8 0x0602
 #endif
 
-#ifdef __CYGWIN__
+#if defined(__CYGWIN__) && !defined(HIDAPI_USING_SDL_RUNTIME)
 #include <ntdef.h>
 #include <wctype.h>
 #define _wcsdup wcsdup
@@ -119,7 +119,7 @@ static HMODULE hid_lib_handle = NULL;
 static HMODULE cfgmgr32_lib_handle = NULL;
 static BOOLEAN hidapi_initialized = FALSE;
 
-static void free_library_handles()
+static void free_library_handles(void)
 {
 	if (hid_lib_handle)
 		FreeLibrary(hid_lib_handle);
@@ -129,12 +129,12 @@ static void free_library_handles()
 	cfgmgr32_lib_handle = NULL;
 }
 
-#ifdef HAVE_GCC_DIAGNOSTIC_PRAGMA
+#if defined(__GNUC__) && __GNUC__ >= 8
 # pragma GCC diagnostic push
 # pragma GCC diagnostic ignored "-Wcast-function-type"
 #endif
 
-static int lookup_functions()
+static int lookup_functions(void)
 {
 	hid_lib_handle = LoadLibraryW(L"hid.dll");
 	if (hid_lib_handle == NULL) {
@@ -146,7 +146,7 @@ static int lookup_functions()
 		goto err;
 	}
 
-#define RESOLVE(lib_handle, x) x = (x##_)GetProcAddress(lib_handle, #x); if (!x) goto err;
+#define RESOLVE(lib_handle, x) x = (x##_)GetProcAddress(lib_handle, #x); if (!x) goto err
 
 	RESOLVE(hid_lib_handle, HidD_GetHidGuid);
 	RESOLVE(hid_lib_handle, HidD_GetAttributes);
@@ -179,7 +179,7 @@ err:
 	return -1;
 }
 
-#ifdef HAVE_GCC_DIAGNOSTIC_PRAGMA
+#if defined(__GNUC__) && __GNUC__ >= 8
 # pragma GCC diagnostic pop
 #endif
 
@@ -221,7 +221,7 @@ static BOOL IsWindowsVersionOrGreater(WORD wMajorVersion, WORD wMinorVersion, WO
 	return VerifyVersionInfoW(&osvi, VER_MAJORVERSION | VER_MINORVERSION | VER_SERVICEPACKMAJOR, dwlConditionMask) != FALSE;
 }
 
-static hid_device *new_hid_device()
+static hid_device *new_hid_device(void)
 {
 	hid_device *dev = (hid_device*) calloc(1, sizeof(hid_device));
 
@@ -334,7 +334,7 @@ static void register_winapi_error_to_buffer(wchar_t **error_buffer, const WCHAR 
 #endif
 }
 
-#ifdef HAVE_GCC_DIAGNOSTIC_PRAGMA
+#if defined(__GNUC__) && (__GNUC__ + (__GNUC_MINOR__ >= 6) > 4)
 # pragma GCC diagnostic push
 # pragma GCC diagnostic ignored "-Warray-bounds"
 #endif
@@ -364,7 +364,7 @@ static void register_string_error_to_buffer(wchar_t **error_buffer, const WCHAR 
 #endif /* HIDAPI_USING_SDL_RUNTIME */
 }
 
-#ifdef HAVE_GCC_DIAGNOSTIC_PRAGMA
+#if defined(__GNUC__) && (__GNUC__ + (__GNUC_MINOR__ >= 6) > 4)
 # pragma GCC diagnostic pop
 #endif
 
@@ -949,6 +949,7 @@ static int hid_blacklist(unsigned short vendor_id, unsigned short product_id)
 		{ 0x0D8C, 0x0014 },  /* Sharkoon Skiller SGH2 headset - causes deadlock asking for device details */
 		{ 0x1532, 0x0109 },  /* Razer Lycosa Gaming keyboard - causes deadlock asking for device details */
 		{ 0x1532, 0x010B },  /* Razer Arctosa Gaming keyboard - causes deadlock asking for device details */
+		{ 0x1532, 0x0227 },  /* Razer Huntsman Gaming keyboard - long delay asking for device details */
 		{ 0x1B1C, 0x1B3D },  /* Corsair Gaming keyboard - causes deadlock asking for device details */
 		{ 0x1CCF, 0x0000 }  /* All Konami Amusement Devices - causes deadlock asking for device details */
 	};
@@ -990,9 +991,7 @@ struct hid_device_info HID_API_EXPORT * HID_API_CALL hid_enumerate(unsigned shor
 			break;
 		}
 
-		if (device_interface_list != NULL) {
-			free(device_interface_list);
-		}
+		free(device_interface_list); // This should NOT be SDL_free()
 
 		device_interface_list = (wchar_t*)calloc(len, sizeof(wchar_t));
 		if (device_interface_list == NULL) {
@@ -1028,6 +1027,12 @@ struct hid_device_info HID_API_EXPORT * HID_API_CALL hid_enumerate(unsigned shor
 			continue;
 		}
 
+#ifdef HIDAPI_IGNORE_DEVICE
+		hid_bus_type bus_type = HID_API_BUS_UNKNOWN;
+		PHIDP_PREPARSED_DATA pp_data = NULL;
+		HIDP_CAPS caps = { 0 };
+#endif
+
 		/* Get the Vendor ID and Product ID for this device. */
 		attrib.Size = sizeof(HIDD_ATTRIBUTES);
 		if (!HidD_GetAttributes(device_handle, &attrib)) {
@@ -1036,14 +1041,12 @@ struct hid_device_info HID_API_EXPORT * HID_API_CALL hid_enumerate(unsigned shor
 
 #ifdef HIDAPI_IGNORE_DEVICE
 		/* See if there are any devices we should skip in enumeration */
-		hid_bus_type bus_type = get_bus_type(device_interface);
-		PHIDP_PREPARSED_DATA pp_data = NULL;
-		HIDP_CAPS caps = { 0 };
+		bus_type = get_bus_type(device_interface);
 		if (HidD_GetPreparsedData(device_handle, &pp_data)) {
 			HidP_GetCaps(pp_data, &caps);
 			HidD_FreePreparsedData(pp_data);
 		}
-		if (HIDAPI_IGNORE_DEVICE(bus_type, attrib.VendorID, attrib.ProductID, caps.UsagePage, caps.Usage)) {
+		if (HIDAPI_IGNORE_DEVICE(bus_type, attrib.VendorID, attrib.ProductID, caps.UsagePage, caps.Usage, false, false)) {
 			goto cont_close;
 		}
 #endif
@@ -1282,7 +1285,7 @@ int HID_API_EXPORT HID_API_CALL hid_write(hid_device *dev, const unsigned char *
 		length = dev->output_report_length;
 	}
 
-	res = WriteFile(dev->device_handle, buf, (DWORD) length, NULL, &dev->write_ol);
+	res = WriteFile(dev->device_handle, buf, (DWORD) length, &bytes_written, &dev->write_ol);
 
 	if (!res) {
 		if (GetLastError() != ERROR_IO_PENDING) {
@@ -1291,6 +1294,9 @@ int HID_API_EXPORT HID_API_CALL hid_write(hid_device *dev, const unsigned char *
 			goto end_of_function;
 		}
 		overlapped = TRUE;
+	} else {
+		/* WriteFile() succeeded synchronously. */
+		function_result = bytes_written;
 	}
 
 	if (overlapped) {
@@ -1395,6 +1401,11 @@ int HID_API_EXPORT HID_API_CALL hid_read_timeout(hid_device *dev, unsigned char 
 		}
 	}
 	if (!res) {
+		if (GetLastError() == ERROR_OPERATION_ABORTED) {
+			/* The read request was issued on another thread.
+			   This is harmless, so just ignore it. */
+			return 0;
+		}
 		register_winapi_error(dev, L"hid_read_timeout/GetOverlappedResult");
 	}
 
@@ -1517,7 +1528,7 @@ int HID_API_EXPORT HID_API_CALL hid_get_input_report(hid_device *dev, unsigned c
 	return hid_get_report(dev, IOCTL_HID_GET_INPUT_REPORT, data, length);
 }
 
-#ifdef HAVE_GCC_DIAGNOSTIC_PRAGMA
+#if defined(__GNUC__) && __GNUC__ >= 8
 # pragma GCC diagnostic push
 # pragma GCC diagnostic ignored "-Wcast-function-type"
 #endif
@@ -1541,7 +1552,7 @@ void HID_API_EXPORT HID_API_CALL hid_close(hid_device *dev)
 	}
 	free_hid_device(dev);
 }
-#ifdef HAVE_GCC_DIAGNOSTIC_PRAGMA
+#if defined(__GNUC__) && __GNUC__ >= 8
 # pragma GCC diagnostic pop
 #endif
 

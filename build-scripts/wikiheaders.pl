@@ -1,5 +1,24 @@
 #!/usr/bin/perl -w
 
+# Simple DirectMedia Layer
+# Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
+#
+# This software is provided 'as-is', without any express or implied
+# warranty.  In no event will the authors be held liable for any damages
+# arising from the use of this software.
+#
+# Permission is granted to anyone to use this software for any purpose,
+# including commercial applications, and to alter it and redistribute it
+# freely, subject to the following restrictions:
+#
+# 1. The origin of this software must not be misrepresented; you must not
+#    claim that you wrote the original software. If you use this software
+#    in a product, an acknowledgment in the product documentation would be
+#    appreciated but is not required.
+# 2. Altered source versions must be plainly marked as such, and must not be
+#    misrepresented as being the original software.
+# 3. This notice may not be removed or altered from any source distribution.
+
 use warnings;
 use strict;
 use File::Path;
@@ -13,10 +32,16 @@ my $wikisubdir = '';
 my $incsubdir = 'include';
 my $readmesubdir = undef;
 my $apiprefixregex = undef;
+my $apipropertyregex = undef;
 my $versionfname = 'include/SDL_version.h';
 my $versionmajorregex = '\A\#define\s+SDL_MAJOR_VERSION\s+(\d+)\Z';
 my $versionminorregex = '\A\#define\s+SDL_MINOR_VERSION\s+(\d+)\Z';
 my $versionmicroregex = '\A\#define\s+SDL_MICRO_VERSION\s+(\d+)\Z';
+my $wikidocsectionsym = 'SDL_WIKI_DOCUMENTATION_SECTION';
+my $forceinlinesym = 'SDL_FORCE_INLINE';
+my $deprecatedsym = 'SDL_DEPRECATED';
+my $declspecsym = '(?:SDLMAIN_|SDL_)?DECLSPEC';
+my $callconvsym = 'SDLCALL';
 my $mainincludefname = 'SDL.h';
 my $selectheaderregex = '\ASDL.*?\.h\Z';
 my $projecturl = 'https://libsdl.org/';
@@ -24,20 +49,33 @@ my $wikiurl = 'https://wiki.libsdl.org';
 my $bugreporturl = 'https://github.com/libsdl-org/sdlwiki/issues/new';
 my $srcpath = undef;
 my $wikipath = undef;
-my $wikireadmesubdir = 'README';
 my $warn_about_missing = 0;
+my $generate_undocumented_page = 0;
 my $copy_direction = 0;
 my $optionsfname = undef;
 my $wikipreamble = undef;
 my $wikiheaderfiletext = 'Defined in %fname%';
 my $manpageheaderfiletext = 'Defined in %fname%';
+my $manpagesymbolfilterregex = undef;
 my $headercategoryeval = undef;
+my $quickrefenabled = 0;
+my @quickrefcategoryorder;
+my $quickreftitle = undef;
+my $quickrefurl = undef;
+my $quickrefdesc = undef;
+my $quickrefmacroregex = undef;
+my $envvarenabled = 0;
+my $envvartitle = 'Environment Variables';
+my $envvardesc = undef;
+my $envvarsymregex = undef;
+my $envvarsymreplace = undef;
 my $changeformat = undef;
 my $manpath = undef;
 my $gitrev = undef;
 
 foreach (@ARGV) {
     $warn_about_missing = 1, next if $_ eq '--warn-about-missing';
+    $generate_undocumented_page = 1, next if $_ eq '--generate-undocumented-page';
     $copy_direction = 1, next if $_ eq '--copy-to-headers';
     $copy_direction = 1, next if $_ eq '--copy-to-header';
     $copy_direction = -1, next if $_ eq '--copy-to-wiki';
@@ -82,9 +120,11 @@ if (defined $optionsfname) {
             $val =~ s/\A\s+//;
             $val =~ s/\s+\Z//;
             $warn_about_missing = int($val), next if $key eq 'warn_about_missing';
+            $generate_undocumented_page = int($val), next if $key eq 'generate_undocumented_page';
             $srcpath = $val, next if $key eq 'srcpath';
             $wikipath = $val, next if $key eq 'wikipath';
             $apiprefixregex = $val, next if $key eq 'apiprefixregex';
+            $apipropertyregex = $val, next if $key eq 'apipropertyregex';
             $projectfullname = $val, next if $key eq 'projectfullname';
             $projectshortname = $val, next if $key eq 'projectshortname';
             $wikisubdir = $val, next if $key eq 'wikisubdir';
@@ -102,7 +142,25 @@ if (defined $optionsfname) {
             $wikipreamble = $val, next if $key eq 'wikipreamble';
             $wikiheaderfiletext = $val, next if $key eq 'wikiheaderfiletext';
             $manpageheaderfiletext = $val, next if $key eq 'manpageheaderfiletext';
+            $manpagesymbolfilterregex = $val, next if $key eq 'manpagesymbolfilterregex';
             $headercategoryeval = $val, next if $key eq 'headercategoryeval';
+            $quickrefenabled = int($val), next if $key eq 'quickrefenabled';
+            @quickrefcategoryorder = split(/,/, $val), next if $key eq 'quickrefcategoryorder';
+            $quickreftitle = $val, next if $key eq 'quickreftitle';
+            $quickrefurl = $val, next if $key eq 'quickrefurl';
+            $quickrefdesc = $val, next if $key eq 'quickrefdesc';
+            $quickrefmacroregex = $val, next if $key eq 'quickrefmacroregex';
+            $envvarenabled = int($val), next if $key eq 'envvarenabled';
+            $envvartitle = $val, next if $key eq 'envvartitle';
+            $envvardesc = $val, next if $key eq 'envvardesc';
+            $envvarsymregex = $val, next if $key eq 'envvarsymregex';
+            $envvarsymreplace = $val, next if $key eq 'envvarsymreplace';
+            $wikidocsectionsym = $val, next if $key eq 'wikidocsectionsym';
+            $forceinlinesym = $val, next if $key eq 'forceinlinesym';
+            $deprecatedsym = $val, next if $key eq 'deprecatedsym';
+            $declspecsym = $val, next if $key eq 'declspecsym';
+            $callconvsym = $val, next if $key eq 'callconvsym';
+
         }
     }
     close(OPTIONS);
@@ -257,14 +315,14 @@ sub wikify_chunk {
             $codedstr .= wikify_chunk($wikitype, $1, undef, undef);
             if (defined $apiprefixregex) {
                 # Convert obvious API things to wikilinks, even inside `code` blocks.
-                $codeblock =~ s/\b($apiprefixregex[a-zA-Z0-9_]+)/[[$1]]/gms;
+                $codeblock =~ s/(\A|[^\/a-zA-Z0-9_])($apiprefixregex[a-zA-Z0-9_]+)/$1\[\[$2\]\]/gms;
             }
             $codedstr .= "<code>$codeblock</code>";
         }
 
         # Convert obvious API things to wikilinks.
         if (defined $apiprefixregex) {
-            $str =~ s/\b($apiprefixregex[a-zA-Z0-9_]+)/[[$1]]/gms;
+            $str =~ s/(\A|[^\/a-zA-Z0-9_])($apiprefixregex[a-zA-Z0-9_]+)/$1\[\[$2\]\]/gms;
         }
 
         # Make some Markdown things into MediaWiki...
@@ -309,7 +367,7 @@ sub wikify_chunk {
 
         # Convert obvious API things to wikilinks.
         if (defined $apiprefixregex) {
-            $str =~ s/\b($apiprefixregex[a-zA-Z0-9_]+)/[$1]($1)/gms;
+            $str =~ s/(\A|[^\/a-zA-Z0-9_\[])($apiprefixregex[a-zA-Z0-9_]+)/$1\[$2\]\($2\)/gms;
         }
 
         $str = $codedstr . $str;
@@ -339,6 +397,19 @@ sub wikify {
     #print("WIKIFY WHOLE DONE:\n\n$retval\n\n\n");
 
     return $retval;
+}
+
+sub gen_manpage_url {
+    my $url = shift;
+    my $desc = shift;
+
+    # We have to unmangle some mangling we just did.  :/
+    $url =~ s/\\\[char46\]/./g;
+
+    # can't have newlines in this.
+    $desc =~ s/\n/ /g;
+
+    return "\n.URL \"$url\" \"$desc\"\n";
 }
 
 
@@ -391,7 +462,12 @@ sub dewikify_chunk {
             $str .= "\n```$codelang\n$code\n```\n";
         }
     } elsif ($dewikify_mode eq 'manpage') {
-        $str =~ s/\./\\[char46]/gms;  # make sure these can't become control codes.
+        # make sure these can't become part of roff syntax.
+        $str =~ s/\\/\\(rs/gms;
+        $str =~ s/\./\\[char46]/gms;
+        $str =~ s/"/\\(dq/gms;
+        $str =~ s/'/\\(aq/gms;
+
         if ($wikitype eq 'mediawiki') {
             # Dump obvious wikilinks.
             if (defined $apiprefixregex) {
@@ -399,7 +475,7 @@ sub dewikify_chunk {
             }
 
             # links
-            $str =~ s/\[(https?\:\/\/.*?)\s+(.*?)\]/\n.URL "$1" "$2"\n/g;
+            $str =~ s/\[(https?\:\/\/.*?)\s+(.*?)\]\s*/gen_manpage_url($1, $2)/ge;
 
             # <code></code> is also popular.  :/
             $str =~ s/\s*\<code>(.*?)<\/code>\s*/\n.BR $1\n/gms;
@@ -416,33 +492,52 @@ sub dewikify_chunk {
             # bullets
             $str =~ s/^\* /\n\\\(bu /gm;
         } elsif ($wikitype eq 'md') {
+            # bullets
+            $str =~ s/^\- /\n\\(bu /gm;
+            # merge paragraphs
+            $str =~ s/^[ \t]+//gm;
+            $str =~ s/([^\-\n])\n([^\-\n])/$1 $2/g;
+            $str =~ s/\n\n/\n.PP\n/g;
+
             # Dump obvious wikilinks.
             if (defined $apiprefixregex) {
-                $str =~ s/\[(\`?$apiprefixregex[a-zA-Z0-9_]+\`?)\]\($apiprefixregex[a-zA-Z0-9_]+\)/\n.BR $1\n/gms;
+                my $apr = $apiprefixregex;
+                if(!($apr =~ /\A\(.*\)\Z/s)) {
+                    # we're relying on the apiprefixregex having a capturing group.
+                    $apr = "(" . $apr . ")";
+                }
+                $str =~ s/(\S*?)\[\`?($apr[a-zA-Z0-9_]+)\`?\]\($apr[a-zA-Z0-9_]+\)(\S*)\s*/\n.BR "" "$1" "$2" "$5"\n/gm;
+                # handle cases like "[x](x), [y](y), [z](z)" being separated.
+                while($str =~ s/(\.BR[^\n]*)\n\n\.BR/$1\n.BR/gm) {}
             }
 
             # links
-            $str =~ s/\[(.*?)]\((https?\:\/\/.*?)\)/\n.URL "$2" "$1"\n/g;
+            $str =~ s/\[([^\]]*?)]\((https?\:\/\/.*?)\)\s*/gen_manpage_url($2, $1)/ge;
 
             # <code></code> is also popular.  :/
-            $str =~ s/\s*\`(.*?)\`\s*/\n.BR $1\n/gms;
+            $str =~ s/\s*(\S*?)\`([^\n]*?)\`(\S*)\s*/\n.BR "" "$1" "$2" "$3"\n/gms;
 
             # bold+italic (this looks bad, just make it bold).
-            $str =~ s/\s*\*\*\*(.*?)\*\*\*\s*/\n.B $1\n/gms;
+            $str =~ s/\s*(\S*?)\*\*\*([^\n]*?)\*\*\*(\S*)\s*/\n.BR "" "$1" "$2" "$3"\n/gms;
 
             # bold
-            $str =~ s/\s*\*\*(.*?)\*\*\s*/\n.B $1\n/gms;
+            $str =~ s/\s*(\S*?)\*\*([^\n]*?)\*\*(\S*)\s*/\n.BR "" "$1" "$2" "$3"\n/gms;
 
             # italic
-            $str =~ s/\s*\*(.*?)\*\s*/\n.I $1\n/gms;
-
-            # bullets
-            $str =~ s/^\- /\n\\\(bu /gm;
+            $str =~ s/\s*(\S*?)\*([^\n]*?)\*(\S*)\s*/\n.IR "" "$1" "$2" "$3"\n/gms;
         }
+
+        # cleanup unnecessary quotes
+        $str =~ s/(\.[IB]R?)(.*?) ""\n/$1$2\n/gm;
+        $str =~ s/(\.[IB]R?) "" ""(.*?)\n/$1$2\n/gm;
+        $str =~ s/"(\S+)"/$1/gm;
+        # cleanup unnecessary whitespace
+        $str =~ s/ +\n/\n/gm;
 
         if (defined $code) {
             $code =~ s/\A\n+//gms;
             $code =~ s/\n+\Z//gms;
+            $code =~ s/\\/\\(rs/gms;
             if ($dewikify_manpage_code_indent) {
                 $str .= "\n.IP\n"
             } else {
@@ -547,7 +642,7 @@ sub dewikify {
             $retval .= dewikify_chunk($wikitype, $1, $2, $3);
         }
     } elsif ($wikitype eq 'md') {
-        while ($str =~ s/\A(.*?)\n```(.*?)\n(.*?)\n```\n//ms) {
+        while ($str =~ s/\A(.*?)\n?```(.*?)\n(.*?)\n```\n//ms) {
             $retval .= dewikify_chunk($wikitype, $1, $2, $3);
         }
     }
@@ -576,7 +671,7 @@ sub filecopy {
 }
 
 sub usage {
-    die("USAGE: $0 <source code git clone path> <wiki git clone path> [--copy-to-headers|--copy-to-wiki|--copy-to-manpages] [--warn-about-missing] [--manpath=<man path>]\n\n");
+    die("USAGE: $0 <source code git clone path> <wiki git clone path> [--copy-to-headers|--copy-to-wiki|--copy-to-manpages] [--warn-about-missing] [--generate-undocumented-page] [--manpath=<man path>]\n\n");
 }
 
 usage() if not defined $srcpath;
@@ -623,9 +718,12 @@ my %headersymshasdoxygen = ();   # $headersymshasdoxygen{"SDL_OpenAudio"} -> 1 i
 my %headersymstype = ();   # $headersymstype{"SDL_OpenAudio"} -> 1 (function), 2 (macro), 3 (struct), 4 (enum), 5 (other typedef)
 my %headersymscategory = ();   # $headersymscategory{"SDL_OpenAudio"} -> 'Audio' ... this is set with a `/* WIKI CATEGEORY: Audio */` comment in the headers that sets it on all symbols until a new comment changes it. So usually, once at the top of the header file.
 my %headercategorydocs = ();   # $headercategorydocs{"Audio"} -> (fake) symbol for this category's documentation. Undefined if not documented.
+my %headersymsparaminfo = (); # $headersymsparaminfo{"SDL_OpenAudio"} -> reference to array of parameters, pushed by name, then C type string, repeating. Undef'd if void params, or not a function.
+my %headersymsrettype = (); # $headersymsrettype{"SDL_OpenAudio"} -> string of C datatype of return value. Undef'd if not a function.
 my %wikitypes = ();  # contains string of wiki page extension, like $wikitypes{"SDL_OpenAudio"} == 'mediawiki'
 my %wikisyms = ();  # contains references to hash of strings, each string being the full contents of a section of a wiki page, like $wikisyms{"SDL_OpenAudio"}{"Remarks"}.
 my %wikisectionorder = ();   # contains references to array, each array item being a key to a wikipage section in the correct order, like $wikisectionorder{"SDL_OpenAudio"}[2] == 'Remarks'
+my %quickreffuncorder = ();   # contains references to array, each array item being a key to a category with functions in the order they appear in the headers, like $quickreffuncorder{"Audio"}[0] == 'SDL_GetNumAudioDrivers'
 
 my %referenceonly = ();  # $referenceonly{"Y"} -> symbol name that this symbol is bound to. This makes wiki pages that say "See X" where "X" is a typedef and "Y" is a define attached to it. These pages are generated in the wiki only and do not bridge to the headers or manpages.
 
@@ -679,18 +777,362 @@ sub print_undocumented_section {
     }
 }
 
+# !!! FIXME: generalize this for other libraries to use.
+sub strip_fn_declaration_metadata {
+    my $decl = shift;
+    $decl =~ s/SDL_(PRINTF|SCANF)_FORMAT_STRING\s*//;  # don't want this metadata as part of the documentation.
+    $decl =~ s/SDL_ALLOC_SIZE2?\(.*?\)\s*//;  # don't want this metadata as part of the documentation.
+    $decl =~ s/SDL_MALLOC\s*//;  # don't want this metadata as part of the documentation.
+    $decl =~ s/SDL_(IN|OUT|INOUT)_.*?CAP\s*\(.*?\)\s*//g;  # don't want this metadata as part of the documentation.
+    $decl =~ s/\)(\s*SDL_[a-zA-Z_]+(\(.*?\)|))*;/);/; # don't want this metadata as part of the documentation.
+    return $decl;
+}
+
+sub sanitize_c_typename {
+    my $str = shift;
+    $str =~ s/\A\s+//;
+    $str =~ s/\s+\Z//;
+    $str =~ s/const\s*(\*+)/const $1/g;  # one space between `const` and pointer stars: `char const* const *` becomes `char const * const *`.
+    $str =~ s/\*\s+\*/**/g;  # drop spaces between pointers: `void * *` becomes `void **`.
+    $str =~ s/\s*(\*+)\Z/ $1/;  # one space between pointer stars and what it points to: `void**` becomes `void **`.
+    return $str;
+}
+
+my %big_ascii = (
+    'A' => [ "\x{20}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}\x{20}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{2588}\x{2588}\x{2551}", "\x{255A}\x{2550}\x{255D}\x{20}\x{20}\x{255A}\x{2550}\x{255D}" ],
+    'B' => [ "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}\x{20}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{255A}\x{2550}\x{2550}\x{2550}\x{2550}\x{2550}\x{255D}\x{20}" ],
+    'C' => [ "\x{20}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{2550}\x{2550}\x{255D}", "\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{20}\x{20}\x{20}", "\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{20}\x{20}\x{20}", "\x{255A}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}", "\x{20}\x{255A}\x{2550}\x{2550}\x{2550}\x{2550}\x{2550}\x{255D}" ],
+    'D' => [ "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}\x{20}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{255A}\x{2550}\x{2550}\x{2550}\x{2550}\x{2550}\x{255D}\x{20}" ],
+    'E' => [ "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{2550}\x{2550}\x{255D}", "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}\x{20}\x{20}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{255D}\x{20}\x{20}", "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}", "\x{255A}\x{2550}\x{2550}\x{2550}\x{2550}\x{2550}\x{2550}\x{255D}" ],
+    'F' => [ "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{2550}\x{2550}\x{255D}", "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}\x{20}\x{20}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{255D}\x{20}\x{20}", "\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{20}\x{20}\x{20}", "\x{255A}\x{2550}\x{255D}\x{20}\x{20}\x{20}\x{20}\x{20}" ],
+    'G' => [ "\x{20}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}\x{20}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{2550}\x{2550}\x{255D}\x{20}", "\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{2588}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2551}", "\x{255A}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{20}\x{255A}\x{2550}\x{2550}\x{2550}\x{2550}\x{2550}\x{255D}\x{20}" ],
+    'H' => [ "\x{2588}\x{2588}\x{2557}\x{20}\x{20}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{2588}\x{2588}\x{2551}", "\x{255A}\x{2550}\x{255D}\x{20}\x{20}\x{255A}\x{2550}\x{255D}" ],
+    'I' => [ "\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2551}", "\x{255A}\x{2550}\x{255D}" ],
+    'J' => [ "\x{20}\x{20}\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2557}", "\x{20}\x{20}\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2551}", "\x{20}\x{20}\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2551}", "\x{255A}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{20}\x{255A}\x{2550}\x{2550}\x{2550}\x{2550}\x{255D}\x{20}" ],
+    'K' => [ "\x{2588}\x{2588}\x{2557}\x{20}\x{20}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2551}\x{20}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}\x{20}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2588}\x{2588}\x{2557}\x{20}", "\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{2588}\x{2588}\x{2557}", "\x{255A}\x{2550}\x{255D}\x{20}\x{20}\x{255A}\x{2550}\x{255D}" ],
+    'L' => [ "\x{2588}\x{2588}\x{2557}\x{20}\x{20}\x{20}\x{20}\x{20}", "\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{20}\x{20}\x{20}", "\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{20}\x{20}\x{20}", "\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{20}\x{20}\x{20}", "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}", "\x{255A}\x{2550}\x{2550}\x{2550}\x{2550}\x{2550}\x{2550}\x{255D}" ],
+    'M' => [ "\x{2588}\x{2588}\x{2588}\x{2557}\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}\x{20}\x{2588}\x{2588}\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2554}\x{2588}\x{2588}\x{2588}\x{2588}\x{2554}\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2551}\x{255A}\x{2588}\x{2588}\x{2554}\x{255D}\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2551}\x{20}\x{255A}\x{2550}\x{255D}\x{20}\x{2588}\x{2588}\x{2551}", "\x{255A}\x{2550}\x{255D}\x{20}\x{20}\x{20}\x{20}\x{20}\x{255A}\x{2550}\x{255D}" ],
+    'N' => [ "\x{2588}\x{2588}\x{2588}\x{2557}\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}\x{20}\x{20}\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2554}\x{2588}\x{2588}\x{2557}\x{20}\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2551}\x{255A}\x{2588}\x{2588}\x{2557}\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2551}\x{20}\x{255A}\x{2588}\x{2588}\x{2588}\x{2588}\x{2551}", "\x{255A}\x{2550}\x{255D}\x{20}\x{20}\x{255A}\x{2550}\x{2550}\x{2550}\x{255D}" ],
+    'O' => [ "\x{20}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}\x{20}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{2550}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2551}", "\x{255A}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{20}\x{255A}\x{2550}\x{2550}\x{2550}\x{2550}\x{2550}\x{255D}\x{20}" ],
+    'P' => [ "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}\x{20}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{2550}\x{255D}\x{20}", "\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{20}\x{20}\x{20}", "\x{255A}\x{2550}\x{255D}\x{20}\x{20}\x{20}\x{20}\x{20}" ],
+    'Q' => [ "\x{20}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{2550}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2551}\x{2584}\x{2584}\x{20}\x{2588}\x{2588}\x{2551}", "\x{255A}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{20}\x{255A}\x{2550}\x{2550}\x{2580}\x{2580}\x{2550}\x{255D}\x{20}" ],
+    'R' => [ "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}\x{20}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{2588}\x{2588}\x{2551}", "\x{255A}\x{2550}\x{255D}\x{20}\x{20}\x{255A}\x{2550}\x{255D}" ],
+    'S' => [ "\x{20}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{2550}\x{2550}\x{255D}", "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}", "\x{255A}\x{2550}\x{2550}\x{2550}\x{2550}\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{255A}\x{2550}\x{2550}\x{2550}\x{2550}\x{2550}\x{255D}\x{20}" ],
+    'T' => [ "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}", "\x{255A}\x{2550}\x{2550}\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{255D}", "\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{20}", "\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{20}", "\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{20}", "\x{20}\x{20}\x{20}\x{255A}\x{2550}\x{255D}\x{20}\x{20}\x{20}" ],
+    'U' => [ "\x{2588}\x{2588}\x{2557}\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2551}", "\x{255A}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{20}\x{255A}\x{2550}\x{2550}\x{2550}\x{2550}\x{2550}\x{255D}\x{20}" ],
+    'V' => [ "\x{2588}\x{2588}\x{2557}\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2551}", "\x{255A}\x{2588}\x{2588}\x{2557}\x{20}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{20}\x{255A}\x{2588}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}\x{20}", "\x{20}\x{20}\x{255A}\x{2550}\x{2550}\x{2550}\x{255D}\x{20}\x{20}" ],
+    'W' => [ "\x{2588}\x{2588}\x{2557}\x{20}\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2551}\x{20}\x{2588}\x{2557}\x{20}\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2551}\x{2588}\x{2588}\x{2588}\x{2557}\x{2588}\x{2588}\x{2551}", "\x{255A}\x{2588}\x{2588}\x{2588}\x{2554}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{20}\x{255A}\x{2550}\x{2550}\x{255D}\x{255A}\x{2550}\x{2550}\x{255D}\x{20}" ],
+    'X' => [ "\x{2588}\x{2588}\x{2557}\x{20}\x{20}\x{2588}\x{2588}\x{2557}", "\x{255A}\x{2588}\x{2588}\x{2557}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{20}\x{255A}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}\x{20}", "\x{20}\x{2588}\x{2588}\x{2554}\x{2588}\x{2588}\x{2557}\x{20}", "\x{2588}\x{2588}\x{2554}\x{255D}\x{20}\x{2588}\x{2588}\x{2557}", "\x{255A}\x{2550}\x{255D}\x{20}\x{20}\x{255A}\x{2550}\x{255D}" ],
+    'Y' => [ "\x{2588}\x{2588}\x{2557}\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2557}", "\x{255A}\x{2588}\x{2588}\x{2557}\x{20}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{20}\x{255A}\x{2588}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}\x{20}", "\x{20}\x{20}\x{255A}\x{2588}\x{2588}\x{2554}\x{255D}\x{20}\x{20}", "\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{20}", "\x{20}\x{20}\x{20}\x{255A}\x{2550}\x{255D}\x{20}\x{20}\x{20}" ],
+    'Z' => [ "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}", "\x{255A}\x{2550}\x{2550}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{20}\x{20}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}\x{20}", "\x{20}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}\x{20}\x{20}", "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}", "\x{255A}\x{2550}\x{2550}\x{2550}\x{2550}\x{2550}\x{2550}\x{255D}" ],
+    ' ' => [ "\x{20}\x{20}\x{20}\x{20}", "\x{20}\x{20}\x{20}\x{20}", "\x{20}\x{20}\x{20}\x{20}", "\x{20}\x{20}\x{20}\x{20}", "\x{20}\x{20}\x{20}\x{20}", "\x{20}\x{20}\x{20}\x{20}" ],
+    '.' => [ "\x{20}\x{20}\x{20}", "\x{20}\x{20}\x{20}", "\x{20}\x{20}\x{20}", "\x{20}\x{20}\x{20}", "\x{2588}\x{2588}\x{2557}", "\x{255A}\x{2550}\x{255D}" ],
+    ',' => [ "\x{20}\x{20}\x{20}", "\x{20}\x{20}\x{20}", "\x{20}\x{20}\x{20}", "\x{20}\x{20}\x{20}", "\x{2584}\x{2588}\x{2557}", "\x{255A}\x{2550}\x{255D}" ],
+    '/' => [ "\x{20}\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2557}", "\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{20}\x{20}\x{2588}\x{2588}\x{2554}\x{255D}\x{20}", "\x{20}\x{2588}\x{2588}\x{2554}\x{255D}\x{20}\x{20}", "\x{2588}\x{2588}\x{2554}\x{255D}\x{20}\x{20}\x{20}", "\x{255A}\x{2550}\x{255D}\x{20}\x{20}\x{20}\x{20}" ],
+    '!' => [ "\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2551}", "\x{255A}\x{2550}\x{255D}", "\x{2588}\x{2588}\x{2557}", "\x{255A}\x{2550}\x{255D}" ],
+    '_' => [ "\x{20}\x{20}\x{20}\x{20}\x{20}\x{20}\x{20}\x{20}", "\x{20}\x{20}\x{20}\x{20}\x{20}\x{20}\x{20}\x{20}", "\x{20}\x{20}\x{20}\x{20}\x{20}\x{20}\x{20}\x{20}", "\x{20}\x{20}\x{20}\x{20}\x{20}\x{20}\x{20}\x{20}", "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}", "\x{255A}\x{2550}\x{2550}\x{2550}\x{2550}\x{2550}\x{2550}\x{255D}" ],
+    '0' => [ "\x{20}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}\x{20}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2551}\x{2588}\x{2588}\x{2554}\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}\x{2588}\x{2588}\x{2551}", "\x{255A}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{20}\x{255A}\x{2550}\x{2550}\x{2550}\x{2550}\x{2550}\x{255D}\x{20}" ],
+    '1' => [ "\x{20}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2588}\x{2551}", "\x{255A}\x{2588}\x{2588}\x{2551}", "\x{20}\x{2588}\x{2588}\x{2551}", "\x{20}\x{2588}\x{2588}\x{2551}", "\x{20}\x{255A}\x{2550}\x{255D}" ],
+    '2' => [ "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}\x{20}", "\x{255A}\x{2550}\x{2550}\x{2550}\x{2550}\x{2588}\x{2588}\x{2557}", "\x{20}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{2550}\x{255D}\x{20}", "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}", "\x{255A}\x{2550}\x{2550}\x{2550}\x{2550}\x{2550}\x{2550}\x{255D}" ],
+    '3' => [ "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}\x{20}", "\x{255A}\x{2550}\x{2550}\x{2550}\x{2550}\x{2588}\x{2588}\x{2557}", "\x{20}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{20}\x{255A}\x{2550}\x{2550}\x{2550}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{255A}\x{2550}\x{2550}\x{2550}\x{2550}\x{2550}\x{255D}\x{20}" ],
+    '4' => [ "\x{2588}\x{2588}\x{2557}\x{20}\x{20}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2551}\x{20}\x{20}\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2551}", "\x{255A}\x{2550}\x{2550}\x{2550}\x{2550}\x{2588}\x{2588}\x{2551}", "\x{20}\x{20}\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2551}", "\x{20}\x{20}\x{20}\x{20}\x{20}\x{255A}\x{2550}\x{255D}" ],
+    '5' => [ "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{2550}\x{2550}\x{255D}", "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}", "\x{255A}\x{2550}\x{2550}\x{2550}\x{2550}\x{2588}\x{2588}\x{2551}", "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2551}", "\x{255A}\x{2550}\x{2550}\x{2550}\x{2550}\x{2550}\x{2550}\x{255D}" ],
+    '6' => [ "\x{20}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}\x{20}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{2550}\x{2550}\x{255D}\x{20}", "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}\x{20}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{2550}\x{2588}\x{2588}\x{2557}", "\x{255A}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{20}\x{255A}\x{2550}\x{2550}\x{2550}\x{2550}\x{2550}\x{255D}\x{20}" ],
+    '7' => [ "\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}", "\x{255A}\x{2550}\x{2550}\x{2550}\x{2550}\x{2588}\x{2588}\x{2551}", "\x{20}\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2554}\x{255D}\x{20}", "\x{20}\x{20}\x{20}\x{2588}\x{2588}\x{2551}\x{20}\x{20}", "\x{20}\x{20}\x{20}\x{255A}\x{2550}\x{255D}\x{20}\x{20}" ],
+    '8' => [ "\x{20}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}\x{20}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{2588}\x{2588}\x{2557}", "\x{255A}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{2588}\x{2588}\x{2557}", "\x{255A}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{20}\x{255A}\x{2550}\x{2550}\x{2550}\x{2550}\x{255D}\x{20}" ],
+    '9' => [ "\x{20}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2557}\x{20}", "\x{2588}\x{2588}\x{2554}\x{2550}\x{2550}\x{2588}\x{2588}\x{2557}", "\x{255A}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2551}", "\x{20}\x{255A}\x{2550}\x{2550}\x{2550}\x{2588}\x{2588}\x{2551}", "\x{20}\x{2588}\x{2588}\x{2588}\x{2588}\x{2588}\x{2554}\x{255D}", "\x{20}\x{255A}\x{2550}\x{2550}\x{2550}\x{2550}\x{255D}\x{20}" ],
+);
+
+sub print_big_ascii_string {
+    my $fh = shift;
+    my $str = shift;
+    my $comment = shift;
+    my $lowascii = shift;
+    $comment = '' if not defined $comment;
+    $lowascii = 0 if not defined $lowascii;
+
+    my @chars = split //, $str;
+    my $charcount = scalar(@chars);
+
+    binmode($fh, ":utf8");
+
+    my $maxrows = $lowascii ? 5 : 6;
+
+    for(my $rownum = 0; $rownum < $maxrows; $rownum++){
+        print $fh $comment;
+        my $charidx = 0;
+        foreach my $ch (@chars) {
+            my $rowsref = $big_ascii{uc($ch)};
+            die("Don't have a big ascii entry for '$ch'!\n") if not defined $rowsref;
+            my $row = @$rowsref[$rownum];
+
+            my $outstr = '';
+            if ($lowascii) {
+                my @x = split //, $row;
+                foreach (@x) {
+                    $outstr .= ($_ eq "\x{2588}") ? 'X' : ' ';
+                }
+            } else {
+                $outstr = $row;
+            }
+
+            $charidx++;
+            if ($charidx == $charcount) {
+                $outstr =~ s/\s*\Z//;  # dump extra spaces at the end of the line.
+            } else {
+                $outstr .= ' ';   # space between glyphs.
+            }
+            print $fh $outstr;
+        }
+        print $fh "\n";
+    }
+}
+
+sub generate_quickref {
+    my $briefsref = shift;
+    my $path = shift;
+    my $lowascii = shift;
+
+    # !!! FIXME: this gitrev and majorver/etc stuff is copy/pasted a few times now.
+    if (!$gitrev) {
+        $gitrev = `cd "$srcpath" ; git rev-list HEAD~..`;
+        chomp($gitrev);
+    }
+
+    # !!! FIXME
+    open(FH, '<', "$srcpath/$versionfname") or die("Can't open '$srcpath/$versionfname': $!\n");
+    my $majorver = 0;
+    my $minorver = 0;
+    my $microver = 0;
+    while (<FH>) {
+        chomp;
+        if (/$versionmajorregex/) {
+            $majorver = int($1);
+        } elsif (/$versionminorregex/) {
+            $minorver = int($1);
+        } elsif (/$versionmicroregex/) {
+            $microver = int($1);
+        }
+    }
+    close(FH);
+    my $fullversion = "$majorver.$minorver.$microver";
+
+    my $tmppath = "$path.tmp";
+    open(my $fh, '>', $tmppath) or die("Can't open '$tmppath': $!\n");
+
+    if (not @quickrefcategoryorder) {
+        @quickrefcategoryorder = sort keys %headercategorydocs;
+    }
+
+    #my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) = gmtime(time);
+    #my $datestr = sprintf("%04d-%02d-%02d %02d:%02d:%02d GMT", $year+1900, $mon+1, $mday, $hour, $min, $sec);
+
+    print $fh "<!-- DO NOT EDIT THIS PAGE ON THE WIKI. IT WILL BE OVERWRITTEN BY WIKIHEADERS AND CHANGES WILL BE LOST! -->\n\n";
+
+    # Just something to test big_ascii output.
+    #print_big_ascii_string($fh, "ABCDEFGHIJ", '', $lowascii);
+    #print_big_ascii_string($fh, "KLMNOPQRST", '', $lowascii);
+    #print_big_ascii_string($fh, "UVWXYZ0123", '', $lowascii);
+    #print_big_ascii_string($fh, "456789JT3A", '', $lowascii);
+    #print_big_ascii_string($fh, "hello, _a.b/c_!!", '', $lowascii);
+
+    # Dan Bechard's work was on an SDL2 cheatsheet:
+    # https://blog.theprogrammingjunkie.com/post/sdl2-cheatsheet/
+
+    if ($lowascii) {
+        print $fh "# QuickReferenceNoUnicode\n\n";
+        print $fh "If you want to paste this into a text editor that can handle\n";
+        print $fh "fancy Unicode section headers, try using\n";
+        print $fh "[QuickReference](QuickReference) instead.\n\n";
+    } else {
+        print $fh "# QuickReference\n\n";
+        print $fh "If you want to paste this into a text editor that can't handle\n";
+        print $fh "the fancy Unicode section headers, try using\n";
+        print $fh "[QuickReferenceNoUnicode](QuickReferenceNoUnicode) instead.\n\n";
+    }
+
+    print $fh "```c\n";
+    print $fh "// $quickreftitle\n" if defined $quickreftitle;
+    print $fh "//\n";
+    print $fh "// $quickrefurl\n//\n" if defined $quickrefurl;
+    print $fh "// $quickrefdesc\n" if defined $quickrefdesc;
+    #print $fh "// When this document was written: $datestr\n";
+    print $fh "// Based on $projectshortname version $fullversion\n";
+    #print $fh "// git revision $gitrev\n";
+    print $fh "//\n";
+    print $fh "// This can be useful in an IDE with search and syntax highlighting.\n";
+    print $fh "//\n";
+    print $fh "// Original idea for this document came from Dan Bechard (thanks!)\n";
+    print $fh "// ASCII art generated by: https://patorjk.com/software/taag/#p=display&f=ANSI%20Shadow (with modified 'S' for readability)\n\n";
+
+    foreach (@quickrefcategoryorder) {
+        my $cat = $_;
+        my $maxlen = 0;
+        my @csigs = ();
+        my $funcorderref = $quickreffuncorder{$cat};
+        next if not defined $funcorderref;
+
+        foreach (@$funcorderref) {
+            my $sym = $_;
+            my $csig = '';
+
+            if ($headersymstype{$sym} == 1) {  # function
+                $csig = "${headersymsrettype{$sym}} $sym";
+                my $fnsigparams = $headersymsparaminfo{$sym};
+                if (not defined($fnsigparams)) {
+                    $csig .= '(void);';
+                } else {
+                    my $sep = '(';
+                    for (my $i = 0; $i < scalar(@$fnsigparams); $i += 2) {
+                        my $paramname = @$fnsigparams[$i];
+                        my $paramtype = @$fnsigparams[$i+1];
+                        my $spc = ($paramtype =~ /\*\Z/) ? '' : ' ';
+                        $csig .= "$sep$paramtype$spc$paramname";
+                        $sep = ', ';
+                    }
+                    $csig .= ");";
+                }
+            } elsif ($headersymstype{$sym} == 2) {  # macro
+                next if defined $quickrefmacroregex && not $sym =~ /$quickrefmacroregex/;
+
+                $csig = (split /\n/, $headerdecls{$sym})[0];  # get the first line from a multiline string.
+                if (not $csig =~ s/\A(\#define [a-zA-Z0-9_]*\(.*?\))(\s+.*)?\Z/$1/) {
+                    $csig =~ s/\A(\#define [a-zA-Z0-9_]*)(\s+.*)?\Z/$1/;
+                }
+                chomp($csig);
+            }
+
+            my $len = length($csig);
+            $maxlen = $len if $len > $maxlen;
+
+            push @csigs, $sym;
+            push @csigs, $csig;
+        }
+
+        $maxlen += 2;
+
+        next if (not @csigs);
+
+        print $fh "\n";
+        print_big_ascii_string($fh, $cat, '// ', $lowascii);
+        print $fh "\n";
+
+        while (@csigs) {
+            my $sym = shift @csigs;
+            my $csig = shift @csigs;
+            my $brief = $$briefsref{$sym};
+            if (defined $brief) {
+                $brief = "$brief";
+                chomp($brief);
+                my $thiswikitype = defined $wikitypes{$sym} ? $wikitypes{$sym} : 'md';  # default to MarkDown for new stuff.
+                $brief = dewikify($thiswikitype, $brief);
+                my $spaces = ' ' x ($maxlen - length($csig));
+                $brief = "$spaces// $brief";
+            } else {
+                $brief = '';
+            }
+            print $fh "$csig$brief\n";
+        }
+    }
+
+    print $fh "```\n\n";
+
+    close($fh);
+
+#    # Don't overwrite the file if nothing has changed besides the timestamp
+#    #  and git revision.
+#    my $matches = 1;
+#    if ( not -f $path ) {
+#        $matches = 0;  # always write if the file hasn't been created yet.
+#    } else {
+#        open(my $fh_a, '<', $tmppath) or die("Can't open '$tmppath': $!\n");
+#        open(my $fh_b, '<', $path) or die("Can't open '$path': $!\n");
+#        while (1) {
+#            my $a = <$fh_a>;
+#            my $b = <$fh_b>;
+#            $matches = 0, last if ((not defined $a) != (not defined $b));
+#            last if ((not defined $a) || (not defined $b));
+#            if ($a ne $b) {
+#                next if ($a =~ /\A\/\/ When this document was written:/);
+#                next if ($a =~ /\A\/\/ git revision /);
+#                $matches = 0;
+#                last;
+#            }
+#        }
+#
+#        close($fh_a);
+#        close($fh_b);
+#    }
+#
+#    if ($matches) {
+#        unlink($tmppath);  # it's the same file except maybe the date/gitrev. Don't overwrite it.
+#    } else {
+#        rename($tmppath, $path) or die("Can't rename '$tmppath' to '$path': $!\n");
+#    }
+    rename($tmppath, $path) or die("Can't rename '$tmppath' to '$path': $!\n");
+}
+
+
+sub generate_envvar_wiki_page {
+    my $briefsref = shift;
+    my $path = shift;
+
+    return if not $envvarenabled or not defined $envvarsymregex or not defined $envvarsymreplace;
+
+    my $replace = "\"$envvarsymreplace\"";
+    my $tmppath = "$path.tmp";
+    open(my $fh, '>', $tmppath) or die("Can't open '$tmppath': $!\n");
+
+    print $fh "<!-- DO NOT EDIT THIS PAGE ON THE WIKI. IT WILL BE OVERWRITTEN BY WIKIHEADERS AND CHANGES WILL BE LOST! -->\n\n";
+    print $fh "# $envvartitle\n\n";
+
+    if (defined $envvardesc) {
+        my $desc = "$envvardesc";
+        $desc =~ s/\\n/\n/g;  # replace "\n" strings with actual newlines.
+        print $fh "$desc\n\n";
+    }
+
+    print $fh "## Environment Variable List\n\n";
+
+    foreach (sort keys %headersyms) {
+        my $sym = $_;
+        next if $headersymstype{$sym} != 2;  # not a #define? skip it.
+        my $hint = "$_";
+        next if not $hint =~ s/$envvarsymregex/$replace/ee;
+
+        my $brief = $$briefsref{$sym};
+        if (not defined $brief) {
+            $brief = '';
+        } else {
+            $brief = "$brief";
+            chomp($brief);
+            my $thiswikitype = defined $wikitypes{$sym} ? $wikitypes{$sym} : 'md';  # default to MarkDown for new stuff.
+            $brief = ": " . dewikify($thiswikitype, $brief);
+        }
+        print $fh "- [$hint]($sym)$brief\n";
+    }
+
+    print $fh "\n";
+
+    close($fh);
+
+    rename($tmppath, $path) or die("Can't rename '$tmppath' to '$path': $!\n");
+}
+
+
+
+
 my $incpath = "$srcpath";
 $incpath .= "/$incsubdir" if $incsubdir ne '';
 
-my $wikireadmepath = "$wikipath/$wikireadmesubdir";
 my $readmepath = undef;
 if (defined $readmesubdir) {
     $readmepath = "$srcpath/$readmesubdir";
 }
 
 opendir(DH, $incpath) or die("Can't opendir '$incpath': $!\n");
-while (my $d = readdir(DH)) {
-    my $dent = $d;
+foreach (sort(readdir(DH))) {
+    my $dent = $_;
     next if not $dent =~ /$selectheaderregex/;  # just selected headers.
     open(FH, '<', "$incpath/$dent") or die("Can't open '$incpath/$dent': $!\n");
 
@@ -708,10 +1150,12 @@ while (my $d = readdir(DH)) {
     }
 
     my @contents = ();
+    my @function_order = ();
     my $ignoring_lines = 0;
     my $header_comment = -1;
     my $saw_category_doxygen = -1;
     my $lineno = 0;
+
     while (<FH>) {
         chomp;
         $lineno++;
@@ -737,7 +1181,7 @@ while (my $d = readdir(DH)) {
         } elsif ($ignoring_lines) {
             push @contents, $_;
             next;
-        } elsif (/\A\s*\#\s*ifndef\s+SDL_WIKI_DOCUMENTATION_SECTION\s*\Z/) {
+        } elsif (/\A\s*\#\s*ifndef\s+$wikidocsectionsym\s*\Z/) {
             $ignoring_lines = 1;
             push @contents, $_;
             next;
@@ -746,13 +1190,13 @@ while (my $d = readdir(DH)) {
             #print("CATEGORY FOR '$dent' CHANGED TO " . (defined($current_wiki_category) ? "'$current_wiki_category'" : '(undef)') . "\n");
             push @contents, $_;
             next;
-        } elsif (/\A\s*extern\s+(SDL_DEPRECATED\s+|)(SDLMAIN_|SDL_)DECLSPEC/) {  # a function declaration without a doxygen comment?
+        } elsif (/\A\s*extern\s+(?:$deprecatedsym\s+|)$declspecsym/) {  # a function declaration without a doxygen comment?
             $symtype = 1;   # function declaration
             @templines = ();
             $decl = $_;
             $str = '';
             $has_doxygen = 0;
-        } elsif (/\A\s*SDL_FORCE_INLINE/) {  # a (forced-inline) function declaration without a doxygen comment?
+        } elsif (/\A\s*$forceinlinesym/) {  # a (forced-inline) function declaration without a doxygen comment?
             $symtype = 1;   # function declaration
             @templines = ();
             $decl = $_;
@@ -819,15 +1263,15 @@ while (my $d = readdir(DH)) {
                 $lineno++ if defined $decl;
                 $decl = '' if not defined $decl;
                 chomp($decl);
-                if ($decl =~ /\A\s*extern\s+(SDL_DEPRECATED\s+|)(SDLMAIN_|SDL_)DECLSPEC/) {
+                if ($decl =~ /\A\s*extern\s+(?:$deprecatedsym\s+|)$declspecsym/) {
                     $symtype = 1;   # function declaration
-                } elsif ($decl =~ /\A\s*SDL_FORCE_INLINE/) {
+                } elsif ($decl =~ /\A\s*$forceinlinesym/) {
                     $symtype = 1;   # (forced-inline) function declaration
                 } elsif ($decl =~ /\A\s*\#\s*define\s+/) {
                     $symtype = 2;   # macro
-                } elsif ($decl =~ /\A\s*(typedef\s+|)(struct|union)/) {
+                } elsif ($decl =~ /\A\s*(typedef\s+|)(struct|union)\s*([a-zA-Z0-9_]*?)\s*(\n|\{|\Z)/) {
                     $symtype = 3;   # struct or union
-                } elsif ($decl =~ /\A\s*(typedef\s+|)enum/) {
+                } elsif ($decl =~ /\A\s*(typedef\s+|)enum\s*([a-zA-Z0-9_]*?)\s*(\n|\{|\Z)/) {
                     $symtype = 4;   # enum
                 } elsif ($decl =~ /\A\s*typedef\s+.*\Z/) {
                     $symtype = 5;   # other typedef
@@ -844,6 +1288,8 @@ while (my $d = readdir(DH)) {
             }
         }
 
+        my @paraminfo = ();
+        my $rettype = undef;
         my @decllines = ( $decl );
         my $sym = '';
 
@@ -856,7 +1302,7 @@ while (my $d = readdir(DH)) {
             }
             $headercategorydocs{$current_wiki_category} = $sym;
         } elsif ($symtype == 1) {  # a function
-            my $is_forced_inline = ($decl =~ /\A\s*SDL_FORCE_INLINE/);
+            my $is_forced_inline = ($decl =~ /\A\s*$forceinlinesym/);
 
             if ($is_forced_inline) {
                 if (not $decl =~ /\)\s*(\{.*|)\s*\Z/) {
@@ -872,7 +1318,7 @@ while (my $d = readdir(DH)) {
                 }
                 $decl =~ s/\s*\)\s*(\{.*|)\s*\Z/);/;
             } else {
-                if (not $decl =~ /\)\s*;/) {
+                if (not $decl =~ /;/) {
                     while (<FH>) {
                         chomp;
                         $lineno++;
@@ -880,19 +1326,28 @@ while (my $d = readdir(DH)) {
                         s/\A\s+//;
                         s/\s+\Z//;
                         $decl .= " $_";
-                        last if /\)\s*;/;
+                        last if /;/;
                     }
                 }
                 $decl =~ s/\s+\);\Z/);/;
+                $decl =~ s/\s+;\Z/;/;
             }
 
             $decl =~ s/\s+\Z//;
 
-            if (!$is_forced_inline && $decl =~ /\A\s*extern\s+(SDL_DEPRECATED\s+|)(SDLMAIN_|SDL_)DECLSPEC\s+(const\s+|)(unsigned\s+|)(.*?)\s*(\*?)\s*SDLCALL\s+(.*?)\s*\((.*?)\);/) {
-                $sym = $7;
-            } elsif ($is_forced_inline && $decl =~ /\A\s*SDL_FORCE_INLINE\s+(SDL_DEPRECATED\s+|)(const\s+|)(unsigned\s+|)(.*?)([\*\s]+)(.*?)\s*\((.*?)\);/) {
+            $decl = strip_fn_declaration_metadata($decl);
+
+            my $paramsstr = undef;
+
+            if (!$is_forced_inline && $decl =~ /\A\s*extern\s+(?:$deprecatedsym\s+|)$declspecsym\w*\s+(const\s+|)(unsigned\s+|)(.*?)([\*\s]+)(\*?)\s*$callconvsym\s+(.*?)\s*\((.*?)\);/) {
                 $sym = $6;
-            } else {
+                $rettype = "$1$2$3$4$5";
+                $paramsstr = $7;
+             } elsif ($is_forced_inline && $decl =~ /\A\s*$forceinlinesym\s+(?:$deprecatedsym\s+|)(const\s+|)(unsigned\s+|)(.*?)([\*\s]+)(.*?)\s*\((.*?)\);/) {
+                $sym = $5;
+                $rettype = "$1$2$3$4";
+                $paramsstr = $6;
+             } else {
                 #print "Found doxygen but no function sig:\n$str\n\n";
                 foreach (@templines) {
                     push @contents, $_;
@@ -903,21 +1358,73 @@ while (my $d = readdir(DH)) {
                 next;
             }
 
-            if (!$is_forced_inline) {  # !!! FIXME: maybe we need to do this for forced-inline stuff too?
-                $decl = '';  # build this with the line breaks, since it looks better for syntax highlighting.
+            $rettype = sanitize_c_typename($rettype);
+
+            if ($paramsstr =~ /\(/) {
+                die("\n\n$0 FAILURE!\n" .
+                    "There's a '(' in the parameters for function '$sym' '$incpath/$dent'.\n" .
+                    "This usually means there's a parameter that's a function pointer type.\n" .
+                    "This causes problems for wikiheaders.pl and is less readable, too.\n" .
+                    "Please put that function pointer into a typedef,\n" .
+                    "and use the new type in this function's signature instead!\n\n");
+            }
+
+            my @params = split(/,/, $paramsstr);
+            my $dotdotdot = 0;
+            foreach (@params) {
+                my $p = $_;
+                $p =~ s/\A\s+//;
+                $p =~ s/\s+\Z//;
+                if (($p eq 'void') || ($p eq '')) {
+                    die("Void parameter in a function with multiple params?! ('$sym' in '$incpath/$dent')") if (scalar(@params) != 1);
+                } elsif ($p eq '...') {
+                    die("Multiple '...' params?! ('$sym' in '$incpath/$dent')") if ($dotdotdot);
+                    $dotdotdot = 1;
+                    push @paraminfo, '...';
+                    push @paraminfo, '...';
+                } elsif ($p =~ /\A(.*)\s+([a-zA-Z0-9_\*\[\]]+)\Z/) {
+                    die("Parameter after '...' param?! ('$sym' in '$incpath/$dent')") if ($dotdotdot);
+                    my $t = $1;
+                    my $n = $2;
+                    if ($n =~ s/\A(\*+)//) {
+                        $t .= $1;  # move any `*` that stuck to the name over.
+                    }
+                    if ($n =~ s/\[\]\Z//) {
+                        $t = "$t*";  # move any `[]` that stuck to the name over, as a pointer.
+                    }
+                    $t = sanitize_c_typename($t);
+                    #print("$t\n");
+                    #print("$n\n");
+                    push @paraminfo, $n;
+                    push @paraminfo, $t;
+                } else {
+                    die("Unexpected parameter '$p' in function '$sym' in '$incpath/$dent'!");
+                }
+            }
+
+            if (!$is_forced_inline) {  # don't do with forced-inline because we don't want the implementation inserted in the wiki.
+                my $shrink_length = 0;
+
+                $decl = '';  # rebuild this with the line breaks, since it looks better for syntax highlighting.
                 foreach (@decllines) {
                     if ($decl eq '') {
+                        my $temp;
+
                         $decl = $_;
-                        $decl =~ s/\Aextern\s+(SDL_DEPRECATED\s+|)(SDLMAIN_|SDL_)DECLSPEC\s+(.*?)\s+(\*?)SDLCALL\s+/$3$4 /;
+                        $temp = $decl;
+                        $temp =~ s/\Aextern\s+(?:$deprecatedsym\s+|)$declspecsym\w*\s+(.*?)\s+(\*?)$callconvsym\s+/$1$2 /;
+                        $shrink_length = length($decl) - length($temp);
+                        $decl = $temp;
                     } else {
                         my $trimmed = $_;
-                        # !!! FIXME: trim space for SDL_DEPRECATED if it was used, too.
-                        $trimmed =~ s/\A\s{28}//;  # 28 for shrinking to match the removed "extern SDL_DECLSPEC SDLCALL "
+                        $trimmed =~ s/\A\s{$shrink_length}//;  # shrink to match the removed "extern SDL_DECLSPEC SDLCALL "
                         $decl .= $trimmed;
                     }
                     $decl .= "\n";
                 }
             }
+
+            $decl = strip_fn_declaration_metadata($decl);
 
             # !!! FIXME: code duplication with typedef processing, below.
             # We assume any `#define`s directly after the function are related to it: probably bitflags for an integer typedef.
@@ -949,7 +1456,7 @@ while (my $d = readdir(DH)) {
                     # update strings now that we know everything pending is to be applied to this declaration. Add pending blank lines and the new text.
 
                     # At Sam's request, don't list property defines with functions. (See #9440)
-                    my $is_property = /\A\s*\#\s*define\s+SDL_PROP_/;
+                    my $is_property = (defined $apipropertyregex) ? /$apipropertyregex/ : 0;
                     if (!$is_property) {
                         if ($blank_lines > 0) {
                             while ($blank_lines > 0) {
@@ -969,9 +1476,8 @@ while (my $d = readdir(DH)) {
                 }
             }
             $decl .= $additional_decl;
-
         } elsif ($symtype == 2) {  # a macro
-            if ($decl =~ /\A\s*\#\s*define\s+(.*?)(\(.*?\)|)\s+/) {
+            if ($decl =~ /\A\s*\#\s*define\s+(.*?)(\(.*?\)|)(\s+|\Z)/) {
                 $sym = $1;
             } else {
                 #print "Found doxygen but no macro:\n$str\n\n";
@@ -996,7 +1502,7 @@ while (my $d = readdir(DH)) {
             }
         } elsif (($symtype == 3) || ($symtype == 4)) {  # struct or union or enum
             my $has_definition = 0;
-            if ($decl =~ /\A\s*(typedef\s+|)(struct|union|enum)\s*(.*?)\s*(\n|\{|\;|\Z)/) {
+            if ($decl =~ /\A\s*(typedef\s+|)(struct|union|enum)\s*([a-zA-Z0-9_]*?)\s*(\n|\{|\;|\Z)/) {
                 my $ctype = $2;
                 my $origsym = $3;
                 my $ending = $4;
@@ -1024,14 +1530,16 @@ while (my $d = readdir(DH)) {
             }
 
             # This block attempts to find the whole struct/union/enum definition by counting matching brackets. Kind of yucky.
+            # It also "parses" enums enough to find out the elements of it.
             if ($has_definition) {
                 my $started = 0;
                 my $brackets = 0;
                 my $pending = $decl;
+                my $skipping_comment = 0;
 
                 $decl = '';
                 while (!$started || ($brackets != 0)) {
-                    foreach my $seg (split(/([{}])/, $pending)) {
+                    foreach my $seg (split(/([{}])/, $pending)) {   # (this will pick up brackets in comments! Be careful!)
                         $decl .= $seg;
                         if ($seg eq '{') {
                             $started = 1;
@@ -1039,6 +1547,25 @@ while (my $d = readdir(DH)) {
                         } elsif ($seg eq '}') {
                             die("Something is wrong with header $incpath/$dent while parsing $sym; is a bracket missing?\n") if ($brackets <= 0);
                             $brackets--;
+                        }
+                    }
+
+                    if ($skipping_comment) {
+                        if ($pending =~ s/\A.*?\*\///) {
+                            $skipping_comment = 0;
+                        }
+                    }
+
+                    if (!$skipping_comment && $started && ($symtype == 4)) {  # Pick out elements of an enum.
+                        my $stripped = "$pending";
+                        $stripped =~ s/\/\*.*?\*\///g;  # dump /* comments */ that exist fully on one line.
+                        if ($stripped =~ /\/\*/) {  # uhoh, a /* comment */ that crosses newlines.
+                            $skipping_comment = 1;
+                        } elsif ($stripped =~ /\A\s*([a-zA-Z0-9_]+)(.*)\Z/) {  #\s*(\=\s*.*?|)\s*,?(.*?)\Z/) {
+                            if ($1 ne 'typedef') {  # make sure we didn't just eat the first line by accident.  :/
+                                #print("ENUM [$1] $incpath/$dent:$lineno\n");
+                                $referenceonly{$1} = $sym;
+                            }
                         }
                     }
 
@@ -1162,7 +1689,7 @@ while (my $d = readdir(DH)) {
                 if ($has_doxygen) {
                     print STDERR "WARNING: Symbol '$sym' appears to be documented in multiple locations. Only keeping the first one we saw!\n";
                 }
-                push @contents, join("\n", @decllines) if (scalar(@decllines) > 0);  # just put the existing declation in as-is.
+                push @contents, join("\n", @decllines) if (scalar(@decllines) > 0);  # just put the existing declaration in as-is.
             }
         }
 
@@ -1174,6 +1701,9 @@ while (my $d = readdir(DH)) {
             $headersymschunk{$sym} = scalar(@contents);
             $headersymshasdoxygen{$sym} = $has_doxygen;
             $headersymstype{$sym} = $symtype;
+            $headersymsparaminfo{$sym} = \@paraminfo if (scalar(@paraminfo) > 0);
+            $headersymsrettype{$sym} = $rettype if (defined($rettype));
+            push @function_order, $sym if ($symtype == 1) || ($symtype == 2);
             push @contents, join("\n", @templines);
             push @contents, join("\n", @decllines) if (scalar(@decllines) > 0);
         }
@@ -1182,8 +1712,10 @@ while (my $d = readdir(DH)) {
     close(FH);
 
     $headers{$dent} = \@contents;
+    $quickreffuncorder{$current_wiki_category} = \@function_order if defined $current_wiki_category;
 }
 closedir(DH);
+
 
 opendir(DH, $wikipath) or die("Can't opendir '$wikipath': $!\n");
 while (my $d = readdir(DH)) {
@@ -1257,20 +1789,20 @@ while (my $d = readdir(DH)) {
             } elsif (/\A\= (.*?) \=\Z/) {
                 $firstline = 0;
                 $current_section = ($1 eq $sym) ? '[Brief]' : $1;
-                die("Doubly-defined section '$current_section' in '$dent'!\n") if defined $sections{$current_section};
+                die("Doubly-defined section '$current_section' in '$wikipath/$dent'!\n") if defined $sections{$current_section};
                 push @section_order, $current_section;
                 $sections{$current_section} = '';
             } elsif (/\A\=\= (.*?) \=\=\Z/) {
                 $firstline = 0;
                 $current_section = ($1 eq $sym) ? '[Brief]' : $1;
-                die("Doubly-defined section '$current_section' in '$dent'!\n") if defined $sections{$current_section};
+                die("Doubly-defined section '$current_section' in '$wikipath/$dent'!\n") if defined $sections{$current_section};
                 push @section_order, $current_section;
                 $sections{$current_section} = '';
                 next;
             } elsif (/\A\-\-\-\-\Z/) {
                 $firstline = 0;
                 $current_section = '[footer]';
-                die("Doubly-defined section '$current_section' in '$dent'!\n") if defined $sections{$current_section};
+                die("Doubly-defined section '$current_section' in '$wikipath/$dent'!\n") if defined $sections{$current_section};
                 push @section_order, $current_section;
                 $sections{$current_section} = '';
                 next;
@@ -1282,14 +1814,14 @@ while (my $d = readdir(DH)) {
             } elsif (/\A\#+ (.*?)\Z/) {
                 $firstline = 0;
                 $current_section = ($1 eq $sym) ? '[Brief]' : $1;
-                die("Doubly-defined section '$current_section' in '$dent'!\n") if defined $sections{$current_section};
+                die("Doubly-defined section '$current_section' in '$wikipath/$dent'!\n") if defined $sections{$current_section};
                 push @section_order, $current_section;
                 $sections{$current_section} = '';
                 next;
             } elsif (/\A\-\-\-\-\Z/) {
                 $firstline = 0;
                 $current_section = '[footer]';
-                die("Doubly-defined section '$current_section' in '$dent'!\n") if defined $sections{$current_section};
+                die("Doubly-defined section '$current_section' in '$wikipath/$dent'!\n") if defined $sections{$current_section};
                 push @section_order, $current_section;
                 $sections{$current_section} = '';
                 next;
@@ -1337,7 +1869,7 @@ closedir(DH);
 
 delete $wikisyms{"Undocumented"};
 
-{
+if ($generate_undocumented_page) {
     my $path = "$wikipath/Undocumented.md";
     open(my $fh, '>', $path) or die("Can't open '$path': $!\n");
 
@@ -1352,14 +1884,14 @@ if ($warn_about_missing) {
     foreach (keys %wikisyms) {
         my $sym = $_;
         if (not defined $headersyms{$sym}) {
-            print("WARNING: $sym defined in the wiki but not the headers!\n");
+            print STDERR "WARNING: $sym defined in the wiki but not the headers!\n";
         }
     }
 
     foreach (keys %headersyms) {
         my $sym = $_;
         if (not defined $wikisyms{$sym}) {
-            print("WARNING: $sym defined in the headers but not the wiki!\n");
+            print STDERR "WARNING: $sym defined in the headers but not the wiki!\n";
         }
     }
 }
@@ -1449,15 +1981,26 @@ if ($copy_direction == 1) {  # --copy-to-headers
             if ($wikitype eq 'mediawiki') {
                 die("Unexpected data parsing MediaWiki table") if (shift @lines ne '{|');  # Dump the '{|' start
                 while (scalar(@lines) >= 3) {
+                    my $c_datatype = shift @lines;
                     my $name = shift @lines;
                     my $desc = shift @lines;
-                    my $terminator = shift @lines;  # the '|-' or '|}' line.
+                    my $terminator;  # the '|-' or '|}' line.
+
+                    if (($desc eq '|-') or ($desc eq '|}') or (not $desc =~ /\A\|/)) {  # we seem to be out of cells, which means there was no datatype column on this one.
+                        $terminator = $desc;
+                        $desc = $name;
+                        $name = $c_datatype;
+                        $c_datatype = '';
+                    } else {
+                        $terminator = shift @lines;
+                    }
+
                     last if ($terminator ne '|-') and ($terminator ne '|}');  # we seem to have run out of table.
                     $name =~ s/\A\|\s*//;
                     $name =~ s/\A\*\*(.*?)\*\*/$1/;
                     $name =~ s/\A\'\'\'(.*?)\'\'\'/$1/;
                     $desc =~ s/\A\|\s*//;
-                    #print STDERR "SYM: $sym   NAME: $name   DESC: $desc TERM: $terminator\n";
+                    #print STDERR "SYM: $sym   CDATATYPE: $c_datatype  NAME: $name   DESC: $desc TERM: $terminator\n";
                     my $whitespacelen = length($name) + 8;
                     my $whitespace = ' ' x $whitespacelen;
                     $desc = wordwrap($desc, -$whitespacelen);
@@ -1471,28 +2014,35 @@ if ($copy_direction == 1) {  # --copy-to-headers
             } elsif ($wikitype eq 'md') {
                 my $l;
                 $l = shift @lines;
-                die("Unexpected data parsing Markdown table") if (not $l =~ /\A\s*\|\s*\|\s*\|\s*\Z/);
+                die("Unexpected data parsing Markdown table") if (not $l =~ /\A(\s*\|)?\s*\|\s*\|\s*\|\s*\Z/);
                 $l = shift @lines;
-                die("Unexpected data parsing Markdown table") if (not $l =~ /\A\s*\|\s*\-*\s*\|\s*\-*\s*\|\s*\Z/);
+                die("Unexpected data parsing Markdown table") if (not $l =~ /\A\s*(\|\s*\-*\s*)?\|\s*\-*\s*\|\s*\-*\s*\|\s*\Z/);
                 while (scalar(@lines) >= 1) {
                     $l = shift @lines;
-                    if ($l =~ /\A\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*\Z/) {
-                        my $name = $1;
-                        my $desc = $2;
-                        $name =~ s/\A\*\*(.*?)\*\*/$1/;
-                        $name =~ s/\A\'\'\'(.*?)\'\'\'/$1/;
-                        #print STDERR "SYM: $sym   NAME: $name   DESC: $desc\n";
-                        my $whitespacelen = length($name) + 8;
-                        my $whitespace = ' ' x $whitespacelen;
-                        $desc = wordwrap($desc, -$whitespacelen);
-                        my @desclines = split /\n/, $desc;
-                        my $firstline = shift @desclines;
-                        $str .= "$paramstr $name $firstline\n";
-                        foreach (@desclines) {
-                            $str .= "${whitespace}$_\n";
-                        }
+                    my $name;
+                    my $desc;
+                    if ($l =~ /\A\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*\Z/) {
+                        # c datatype is $1, but we don't care about it here.
+                        $name = $2;
+                        $desc = $3;
+                    } elsif ($l =~ /\A\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*\Z/) {
+                        $name = $1;
+                        $desc = $2;
                     } else {
                         last;  # we seem to have run out of table.
+                    }
+
+                    $name =~ s/\A\*\*(.*?)\*\*/$1/;
+                    $name =~ s/\A\'\'\'(.*?)\'\'\'/$1/;
+                    #print STDERR "SYM: $sym   NAME: $name   DESC: $desc\n";
+                    my $whitespacelen = length($name) + 8;
+                    my $whitespace = ' ' x $whitespacelen;
+                    $desc = wordwrap($desc, -$whitespacelen);
+                    my @desclines = split /\n/, $desc;
+                    my $firstline = shift @desclines;
+                    $str .= "$paramstr $name $firstline\n";
+                    foreach (@desclines) {
+                        $str .= "${whitespace}$_\n";
                     }
                 }
             } else {
@@ -1503,8 +2053,9 @@ if ($copy_direction == 1) {  # --copy-to-headers
         if (defined $returns) {
             $str .= "\n" if $addblank; $addblank = 1;
             my $r = dewikify($wikitype, $returns);
+            $r =~ s/\A\(.*?\)\s*//;  # Chop datatype in parentheses off the front.
             my $retstr = "\\returns";
-            if ($r =~ s/\AReturn(s?) //) {
+            if ($r =~ s/\AReturn(s?)\s+//) {
                 $retstr = "\\return$1";
             }
 
@@ -1622,21 +2173,20 @@ if ($copy_direction == 1) {  # --copy-to-headers
     }
 
     if (defined $readmepath) {
-        if ( -d $wikireadmepath ) {
-            mkdir($readmepath);  # just in case
-            opendir(DH, $wikireadmepath) or die("Can't opendir '$wikireadmepath': $!\n");
-            while (readdir(DH)) {
-                my $dent = $_;
-                if ($dent =~ /\A(.*?)\.md\Z/) {  # we only bridge Markdown files here.
-                    next if $1 eq 'FrontPage';
-                    filecopy("$wikireadmepath/$dent", "$readmepath/README-$dent", "\n");
-                }
+        mkdir($readmepath);  # just in case
+        opendir(DH, $wikipath) or die("Can't opendir '$wikipath': $!\n");
+        while (readdir(DH)) {
+            my $dent = $_;
+            if ($dent =~ /\A(README|INTRO)\-.*?\.md\Z/) {  # we only bridge Markdown files here that start with "README-" or "INTRO-".
+                filecopy("$wikipath/$dent", "$readmepath/$dent", "\n");
             }
-            closedir(DH);
         }
+        closedir(DH);
     }
 
 } elsif ($copy_direction == -1) { # --copy-to-wiki
+
+    my %briefs = ();  # $briefs{'SDL_OpenAudio'} -> the \brief string for the function.
 
     if (defined $changeformat) {
         $dewikify_mode = $changeformat;
@@ -1700,6 +2250,7 @@ if ($copy_direction == 1) {  # --copy-to-headers
         if ($wikitype eq 'mediawiki') {
             $syntax = "<syntaxhighlight lang='c'>\n$decl</syntaxhighlight>\n";
         } elsif ($wikitype eq 'md') {
+            $decl =~ s/\n+\Z//;
             $syntax = "```c\n$decl\n```\n";
         } else { die("Expected wikitype '$wikitype'"); }
 
@@ -1708,7 +2259,13 @@ if ($copy_direction == 1) {  # --copy-to-headers
         $sections{'Remarks'} = "$remarks\n" if $remarks ne '';
         $sections{'Syntax'} = $syntax;
 
-        my @params = ();  # have to parse these and build up the wiki tables after, since Markdown needs to know the length of the largest string.  :/
+        $briefs{$sym} = $brief;
+
+        my %params = ();  # have to parse these and build up the wiki tables after, since Markdown needs to know the length of the largest string.  :/
+        my @paramsorder = ();
+        my $fnsigparams = $headersymsparaminfo{$sym};
+        my $has_returns = 0;
+        my $has_threadsafety = 0;
 
         while (@doxygenlines) {
             my $l = shift @doxygenlines;
@@ -1730,12 +2287,40 @@ if ($copy_direction == 1) {  # --copy-to-headers
 
                 $desc =~ s/[\s\n]+\Z//ms;
 
+                if (0) {
+                    if (($desc =~ /\A[a-z]/) && (not $desc =~ /$apiprefixregex/)) {
+                        print STDERR "WARNING: $sym\'s '\\param $arg' text starts with a lowercase letter: '$desc'. Fixing.\n";
+                        $desc = ucfirst($desc);
+                    }
+                }
+
+                if (not $desc =~ /[\.\!]\Z/) {
+                    print STDERR "WARNING: $sym\'s '\\param $arg' text doesn't end with punctuation: '$desc'. Fixing.\n";
+                    $desc .= '.';
+                }
+
+                # Validate this param.
+                if (defined($params{$arg})) {
+                    print STDERR "WARNING: Symbol '$sym' has multiple '\\param $arg' declarations! Only keeping the first one!\n";
+                } elsif (defined $fnsigparams) {
+                    my $found = 0;
+                    for (my $i = 0; $i < scalar(@$fnsigparams); $i += 2) {
+                        $found = 1, last if (@$fnsigparams[$i] eq $arg);
+                    }
+                    if (!$found) {
+                        print STDERR "WARNING: Symbol '$sym' has a '\\param $arg' for a param that doesn't exist. It will be removed!\n";
+                    }
+                }
+
                 # We need to know the length of the longest string to make Markdown tables, so we just store these off until everything is parsed.
-                push @params, $arg;
-                push @params, $desc;
+                $params{$arg} = $desc;
+                push @paramsorder, $arg;
             } elsif ($l =~ /\A\\r(eturns?)\s+(.*)\Z/) {
+                $has_returns = 1;
+                # !!! FIXME: complain if this isn't a function or macro.
                 my $retstr = "R$1";  # "Return" or "Returns"
                 my $desc = $2;
+
                 while (@doxygenlines) {
                     my $subline = $doxygenlines[0];
                     $subline =~ s/\A\s*//;
@@ -1748,7 +2333,32 @@ if ($copy_direction == 1) {  # --copy-to-headers
                     }
                 }
                 $desc =~ s/[\s\n]+\Z//ms;
-                $sections{'Return Value'} = wordwrap("$retstr " . wikify($wikitype, $desc)) . "\n";
+
+                if (0) {
+                    if (($desc =~ /\A[A-Z]/) && (not $desc =~ /$apiprefixregex/)) {
+                        print STDERR "WARNING: $sym\'s '\\returns' text starts with a capital letter: '$desc'. Fixing.\n";
+                        $desc = lcfirst($desc);
+                    }
+                }
+
+                if (not $desc =~ /[\.\!]\Z/) {
+                    print STDERR "WARNING: $sym\'s '\\returns' text doesn't end with punctuation: '$desc'. Fixing.\n";
+                    $desc .= '.';
+                }
+
+                # Make sure the \returns info is valid.
+                my $rettype = $headersymsrettype{$sym};
+                die("Don't have a rettype for '$sym' for some reason!") if (($symtype == 1) && (not defined($rettype)));
+                if (defined($sections{'Return Value'})) {
+                    print STDERR "WARNING: Symbol '$sym' has multiple '\\return' declarations! Only keeping the first one!\n";
+                } elsif (($symtype != 1) && ($symtype != 2) && ($symtype != 5)) {  # !!! FIXME: if 5, make sure it's a function pointer typedef!
+                    print STDERR "WARNING: Symbol '$sym' has a '\\return' declaration but isn't a function or macro! Removing it!\n";
+                } elsif (($symtype == 1) && ($headersymsrettype{$sym} eq 'void')) {
+                    print STDERR "WARNING: Function '$sym' has a '\\returns' declaration but function returns void! Removing it!\n";
+                } else {
+                    my $rettypestr = defined($rettype) ? ('(' . wikify($wikitype, $rettype) . ') ') : '';
+                    $sections{'Return Value'} = wordwrap("$rettypestr$retstr ". wikify($wikitype, $desc)) . "\n";
+                }
             } elsif ($l =~ /\A\\deprecated\s+(.*)\Z/) {
                 my $desc = $1;
                 while (@doxygenlines) {
@@ -1794,6 +2404,7 @@ if ($copy_direction == 1) {  # --copy-to-headers
                 }
                 $desc =~ s/[\s\n]+\Z//ms;
                 $sections{'Thread Safety'} = wordwrap(wikify($wikitype, $desc)) . "\n";
+                $has_threadsafety = 1;
             } elsif ($l =~ /\A\\sa\s+(.*)\Z/) {
                 my $sa = $1;
                 $sa =~ s/\(\)\Z//;  # Convert "SDL_Func()" to "SDL_Func"
@@ -1803,6 +2414,44 @@ if ($copy_direction == 1) {  # --copy-to-headers
                 } elsif ($wikitype eq 'md') {
                     $sections{'See Also'} .= "- [$sa]($sa)\n";
                 } else { die("Expected wikitype '$wikitype'"); }
+            }
+        }
+
+        if (($symtype == 1) && ($headersymsrettype{$sym} ne 'void') && !$has_returns) {
+            print STDERR "WARNING: Function '$sym' has a non-void return type but no '\\returns' declaration\n";
+        }
+
+        # !!! FIXME: uncomment this when we're trying to clean this up in the headers.
+        #if (($symtype == 1) && !$has_threadsafety) {
+        #    print STDERR "WARNING: Function '$sym' doesn't have a '\\threadsafety' declaration\n";
+        #}
+
+        # Make sure %params is in the same order as the actual function signature and add C datatypes...
+        my $params_has_c_datatype = 0;
+        my @final_params = ();
+        if (($symtype == 1) && (defined($headersymsparaminfo{$sym}))) {  # is a function and we have param info for it...
+            my $fnsigparams = $headersymsparaminfo{$sym};
+            for (my $i = 0; $i < scalar(@$fnsigparams); $i += 2) {
+                my $paramname = @$fnsigparams[$i];
+                my $paramdesc = $params{$paramname};
+                if (defined($paramdesc)) {
+                    push @final_params, $paramname;             # name
+                    push @final_params, @$fnsigparams[$i+1];    # C datatype
+                    push @final_params, $paramdesc;             # description
+                    $params_has_c_datatype = 1 if (defined(@$fnsigparams[$i+1]));
+                } else {
+                    print STDERR "WARNING: Symbol '$sym' is missing a '\\param $paramname' declaration!\n";
+                }
+            }
+        } else {
+            foreach (@paramsorder) {
+                my $paramname = $_;
+                my $paramdesc = $params{$paramname};
+                if (defined($paramdesc)) {
+                    push @final_params, $_;
+                    push @final_params, undef;
+                    push @final_params, $paramdesc;
+                }
             }
         }
 
@@ -1830,32 +2479,42 @@ if ($copy_direction == 1) {  # --copy-to-headers
                 } else {
                     die("Unexpected symbol type $symtype!");
                 }
-                my $str = "This $symtypename is available since SDL 3.0.0.";
+                my $str = "This $symtypename is available since $projectshortname 3.0.0.";
                 $sections{'Version'} = wordwrap(wikify($wikitype, $str)) . "\n";
             }
         }
 
         # We can build the wiki table now that we have all the data.
-        if (scalar(@params) > 0) {
+        if (scalar(@final_params) > 0) {
             my $str = '';
             if ($wikitype eq 'mediawiki') {
-                while (scalar(@params) > 0) {
-                    my $arg = shift @params;
-                    my $desc = wikify($wikitype, shift @params);
+                while (scalar(@final_params) > 0) {
+                    my $arg = shift @final_params;
+                    my $c_datatype = shift @final_params;
+                    my $desc = wikify($wikitype, shift @final_params);
+                    $c_datatype = '' if not defined $c_datatype;
                     $str .= ($str eq '') ? "{|\n" : "|-\n";
+                    $str .= "|$c_datatype\n" if $params_has_c_datatype;
                     $str .= "|'''$arg'''\n";
                     $str .= "|$desc\n";
                 }
                 $str .= "|}\n";
             } elsif ($wikitype eq 'md') {
                 my $longest_arg = 0;
+                my $longest_c_datatype = 0;
                 my $longest_desc = 0;
                 my $which = 0;
-                foreach (@params) {
+                foreach (@final_params) {
                     if ($which == 0) {
-                        my $len = length($_) + 4;
+                        my $len = length($_);
                         $longest_arg = $len if ($len > $longest_arg);
                         $which = 1;
+                    } elsif ($which == 1) {
+                        if (defined($_)) {
+                            my $len = length(wikify($wikitype, $_));
+                            $longest_c_datatype = $len if ($len > $longest_c_datatype);
+                        }
+                        $which = 2;
                     } else {
                         my $len = length(wikify($wikitype, $_));
                         $longest_desc = $len if ($len > $longest_desc);
@@ -1864,13 +2523,22 @@ if ($copy_direction == 1) {  # --copy-to-headers
                 }
 
                 # Markdown tables are sort of obnoxious.
-                $str .= '| ' . (' ' x ($longest_arg+4)) . ' | ' . (' ' x $longest_desc) . " |\n";
-                $str .= '| ' . ('-' x ($longest_arg+4)) . ' | ' . ('-' x $longest_desc) . " |\n";
+                my $c_datatype_cell;
+                $c_datatype_cell = ($longest_c_datatype > 0) ? ('| ' . (' ' x ($longest_c_datatype)) . ' ') : '';
+                $str .= $c_datatype_cell . '| ' . (' ' x ($longest_arg+4)) . ' | ' . (' ' x $longest_desc) . " |\n";
+                $c_datatype_cell = ($longest_c_datatype > 0) ? ('| ' . ('-' x ($longest_c_datatype)) . ' ') : '';
+                $str .= $c_datatype_cell . '| ' . ('-' x ($longest_arg+4)) . ' | ' . ('-' x $longest_desc) . " |\n";
 
-                while (@params) {
-                    my $arg = shift @params;
-                    my $desc = wikify($wikitype, shift @params);
-                    $str .= "| **$arg** " . (' ' x ($longest_arg - length($arg))) . "| $desc" . (' ' x ($longest_desc - length($desc))) . " |\n";
+                while (@final_params) {
+                    my $arg = shift @final_params;
+                    my $c_datatype = shift @final_params;
+                    $c_datatype_cell = '';
+                    if ($params_has_c_datatype) {
+                        $c_datatype = defined($c_datatype) ? wikify($wikitype, $c_datatype) : '';
+                        $c_datatype_cell = ($longest_c_datatype > 0) ? ("| $c_datatype " . (' ' x ($longest_c_datatype - length($c_datatype)))) : '';
+                    }
+                    my $desc = wikify($wikitype, shift @final_params);
+                    $str .= $c_datatype_cell . "| **$arg** " . (' ' x ($longest_arg - length($arg))) . "| $desc" . (' ' x ($longest_desc - length($desc))) . " |\n";
                 }
             } else {
                 die("Unexpected wikitype!");  # should have checked this elsewhere.
@@ -2036,9 +2704,14 @@ if ($copy_direction == 1) {  # --copy-to-headers
             print FH "###### $wikified_preamble\n";
         }
 
+        my $category = 'CategoryAPIMacro';
+        if ($headersymstype{$refersto} == 4) {
+            $category = 'CategoryAPIEnumerators';  # NOT CategoryAPIEnum!
+        }
+
         print FH "# $sym\n\nPlease refer to [$refersto]($refersto) for details.\n\n";
         print FH "----\n";
-        print FH "[CategoryAPI](CategoryAPI), [CategoryAPIMacro](CategoryAPIMacro)\n\n";
+        print FH "[CategoryAPI](CategoryAPI), [$category]($category)\n\n";
 
         close(FH);
     }
@@ -2113,31 +2786,27 @@ __EOF__
     # Write out READMEs...
     if (defined $readmepath) {
         if ( -d $readmepath ) {
-            mkdir($wikireadmepath);  # just in case
+            mkdir($wikipath);  # just in case
             opendir(DH, $readmepath) or die("Can't opendir '$readmepath': $!\n");
             while (my $d = readdir(DH)) {
                 my $dent = $d;
-                if ($dent =~ /\AREADME\-(.*?\.md)\Z/) {  # we only bridge Markdown files here.
-                    my $wikifname = $1;
-                    next if $wikifname eq 'FrontPage.md';
-                    filecopy("$readmepath/$dent", "$wikireadmepath/$wikifname", "\n");
+                if ($dent =~ /\A(README|INTRO)\-.*?\.md\Z/) {  # we only bridge Markdown files here that start with "README-" or "INTRO".
+                    filecopy("$readmepath/$dent", "$wikipath/$dent", "\n");
                 }
             }
             closedir(DH);
 
             my @pages = ();
-            opendir(DH, $wikireadmepath) or die("Can't opendir '$wikireadmepath': $!\n");
+            opendir(DH, $wikipath) or die("Can't opendir '$wikipath': $!\n");
             while (my $d = readdir(DH)) {
                 my $dent = $d;
-                if ($dent =~ /\A(.*?)\.(mediawiki|md)\Z/) {
-                    my $wikiname = $1;
-                    next if $wikiname eq 'FrontPage';
-                    push @pages, $wikiname;
+                if ($dent =~ /\A((README|INTRO)\-.*?)\.md\Z/) {
+                    push @pages, $1;
                 }
             }
             closedir(DH);
 
-            open(FH, '>', "$wikireadmepath/FrontPage.md") or die("Can't open '$wikireadmepath/FrontPage.md': $!\n");
+            open(FH, '>', "$wikipath/READMEs.md") or die("Can't open '$wikipath/READMEs.md': $!\n");
             print FH "# All READMEs available here\n\n";
             foreach (sort @pages) {
                 my $wikiname = $_;
@@ -2145,6 +2814,16 @@ __EOF__
             }
             close(FH);
         }
+    }
+
+    # Write out quick reference pages...
+    if ($quickrefenabled) {
+        generate_quickref(\%briefs, "$wikipath/QuickReference.md", 0);
+        generate_quickref(\%briefs, "$wikipath/QuickReferenceNoUnicode.md", 1);
+    }
+
+    if ($envvarenabled and defined $envvarsymregex and defined $envvarsymreplace) {
+        generate_envvar_wiki_page(\%briefs, "$wikipath/EnvironmentVariables.md");
     }
 
 } elsif ($copy_direction == -2) { # --copy-to-manpages
@@ -2192,11 +2871,11 @@ __EOF__
         my $sym = $_;
         next if not defined $wikisyms{$sym};  # don't have a page for that function, skip it.
         next if $sym =~ /\A\[category documentation\]/;   # not real symbols
+        next if (defined $manpagesymbolfilterregex) && ($sym =~ /$manpagesymbolfilterregex/);
         my $symtype = $headersymstype{$sym};
         my $wikitype = $wikitypes{$sym};
         my $sectionsref = $wikisyms{$sym};
         my $remarks = $sectionsref->{'Remarks'};
-        my $params = $sectionsref->{'Function Parameters'};
         my $returns = $sectionsref->{'Return Value'};
         my $version = $sectionsref->{'Version'};
         my $threadsafety = $sectionsref->{'Thread Safety'};
@@ -2204,6 +2883,23 @@ __EOF__
         my $examples = $sectionsref->{'Code Examples'};
         my $deprecated = $sectionsref->{'Deprecated'};
         my $headerfile = $manpageheaderfiletext;
+
+        my $params = undef;
+
+        if ($symtype == -1) {  # category documentation block.
+            # nothing to be done here.
+        } elsif (($symtype == 1) || (($symtype == 5))) {  # we'll assume a typedef (5) with a \param is a function pointer typedef.
+            $params = $sectionsref->{'Function Parameters'};
+        } elsif ($symtype == 2) {
+            $params = $sectionsref->{'Macro Parameters'};
+        } elsif ($symtype == 3) {
+            $params = $sectionsref->{'Fields'};
+        } elsif ($symtype == 4) {
+            $params = $sectionsref->{'Values'};
+        } else {
+            die("Unexpected symtype $symtype");
+        }
+
         $headerfile =~ s/\%fname\%/$headersymslocation{$sym}/g;
         $headerfile .= "\n";
 
@@ -2223,13 +2919,19 @@ __EOF__
         my $decl = $headerdecls{$sym};
         my $str = '';
 
-        $brief = "$brief";
+        # the "$brief" makes sure this is a copy of the string, which is doing some weird reference thing otherwise.
+        $brief = defined $brief ? "$brief" : '';
         $brief =~ s/\A[\s\n]*\= .*? \=\s*?\n+//ms;
         $brief =~ s/\A[\s\n]*\=\= .*? \=\=\s*?\n+//ms;
         $brief =~ s/\A(.*?\.) /$1\n/;  # \brief should only be one sentence, delimited by a period+space. Split if necessary.
         my @briefsplit = split /\n/, $brief;
         $brief = shift @briefsplit;
         $brief = dewikify($wikitype, $brief);
+
+        # Hack: `apropros` doesn't like escaped character things like `\[char46]` for `.`...since almost every
+        # manpage will end their Brief section with a period and it won't wordwrap to risk being a groff control
+        # character, just replace it.
+        $brief =~ s/\\\[char46\]/./g;
 
         if (defined $remarks) {
             $remarks = dewikify($wikitype, join("\n", @briefsplit) . $remarks);
@@ -2247,7 +2949,7 @@ __EOF__
         $str .= ".\\\" Please report issues in this manpage's content at:\n";
         $str .= ".\\\"   $bugreporturl\n";
         $str .= ".\\\" Please report issues in the generation of this manpage from the wiki at:\n";
-        $str .= ".\\\"   https://github.com/libsdl-org/SDL/issues/new?title=Misgenerated%20manpage%20for%20$sym\n";
+        $str .= ".\\\"   https://github.com/libsdl-org/SDL/issues/new?title=Misgenerated%20manpage%20for%20$sym\n";  # !!! FIXME: if this becomes a problem for other projects, we'll generalize this.
         $str .= ".\\\" $projectshortname can be found at $projecturl\n";
 
         # Define a .URL macro. The "www.tmac" thing decides if we're using GNU roff (which has a .URL macro already), and if so, overrides the macro we just created.
@@ -2269,18 +2971,22 @@ __EOF__
             $str .= dewikify($wikitype, $deprecated) . "\n";
         }
 
+        my $incfile = $mainincludefname;
         if (defined $headerfile) {
-            $str .= ".SH HEADER FILE\n";
-            $str .= dewikify($wikitype, $headerfile) . "\n";
+            if($headerfile =~ /Defined in (.*)/) {
+                $incfile = $1;
+            }
         }
 
         $str .= ".SH SYNOPSIS\n";
         $str .= ".nf\n";
-        $str .= ".B #include \\(dq$mainincludefname\\(dq\n";
+        $str .= ".B #include <$incfile>\n";
         $str .= ".PP\n";
 
         my @decllines = split /\n/, $decl;
         foreach (@decllines) {
+            $_ =~ s/\\/\\(rs/g;  # fix multiline macro defs
+            $_ =~ s/"/\\(dq/g;
             $str .= ".BI \"$_\n";
         }
         $str .= ".fi\n";
@@ -2307,16 +3013,27 @@ __EOF__
             if ($wikitype eq 'mediawiki') {
                 die("Unexpected data parsing MediaWiki table") if (shift @lines ne '{|');  # Dump the '{|' start
                 while (scalar(@lines) >= 3) {
+                    my $c_datatype = shift @lines;
                     my $name = shift @lines;
                     my $desc = shift @lines;
-                    my $terminator = shift @lines;  # the '|-' or '|}' line.
+                    my $terminator;  # the '|-' or '|}' line.
+
+                    if (($desc eq '|-') or ($desc eq '|}') or (not $desc =~ /\A\|/)) {  # we seem to be out of cells, which means there was no datatype column on this one.
+                        $terminator = $desc;
+                        $desc = $name;
+                        $name = $c_datatype;
+                        $c_datatype = '';
+                    } else {
+                        $terminator = shift @lines;
+                    }
+
                     last if ($terminator ne '|-') and ($terminator ne '|}');  # we seem to have run out of table.
                     $name =~ s/\A\|\s*//;
                     $name =~ s/\A\*\*(.*?)\*\*/$1/;
                     $name =~ s/\A\'\'\'(.*?)\'\'\'/$1/;
                     $desc =~ s/\A\|\s*//;
                     $desc = dewikify($wikitype, $desc);
-                    #print STDERR "FN: $sym   NAME: $name   DESC: $desc TERM: $terminator\n";
+                    #print STDERR "SYM: $sym   CDATATYPE: $c_datatype  NAME: $name   DESC: $desc TERM: $terminator\n";
 
                     $str .= ".TP\n";
                     $str .= ".I $name\n";
@@ -2325,24 +3042,31 @@ __EOF__
             } elsif ($wikitype eq 'md') {
                 my $l;
                 $l = shift @lines;
-                die("Unexpected data parsing Markdown table") if (not $l =~ /\A\s*\|\s*\|\s*\|\s*\Z/);
+                die("Unexpected data parsing Markdown table") if (not $l =~ /\A(\s*\|)?\s*\|\s*\|\s*\|\s*\Z/);
                 $l = shift @lines;
-                die("Unexpected data parsing Markdown table") if (not $l =~ /\A\s*\|\s*\-*\s*\|\s*\-*\s*\|\s*\Z/);
+                die("Unexpected data parsing Markdown table") if (not $l =~ /\A\s*(\|\s*\-*\s*)?\|\s*\-*\s*\|\s*\-*\s*\|\s*\Z/);
                 while (scalar(@lines) >= 1) {
                     $l = shift @lines;
-                    if ($l =~ /\A\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*\Z/) {
-                        my $name = $1;
-                        my $desc = $2;
-                        $name =~ s/\A\*\*(.*?)\*\*/$1/;
-                        $name =~ s/\A\'\'\'(.*?)\'\'\'/$1/;
-                        $desc = dewikify($wikitype, $desc);
-
-                        $str .= ".TP\n";
-                        $str .= ".I $name\n";
-                        $str .= "$desc\n";
+                    my $name;
+                    my $desc;
+                    if ($l =~ /\A\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*\Z/) {
+                        # c datatype is $1, but we don't care about it here.
+                        $name = $2;
+                        $desc = $3;
+                    } elsif ($l =~ /\A\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*\Z/) {
+                        $name = $1;
+                        $desc = $2;
                     } else {
                         last;  # we seem to have run out of table.
                     }
+
+                    $name =~ s/\A\*\*(.*?)\*\*/$1/;
+                    $name =~ s/\A\'\'\'(.*?)\'\'\'/$1/;
+                    $desc = dewikify($wikitype, $desc);
+
+                    $str .= ".TP\n";
+                    $str .= ".I $name\n";
+                    $str .= "$desc\n";
                 }
             } else {
                 die("write me");
@@ -2350,8 +3074,15 @@ __EOF__
         }
 
         if (defined $returns) {
+            # Check for md link in return type: ([SDL_Renderer](SDL_Renderer) *)
+            # This would've prevented the next regex from working properly (it'd leave " *)")
+            $returns =~ s/\A\((const|)\s*\[.*?\]\((.*?)\)/\($2/ms;
+            # Chop datatype in parentheses off the front.
+            $returns =~ s/\A\(.*?\) //;
+
+            $returns = dewikify($wikitype, $returns);
             $str .= ".SH RETURN VALUE\n";
-            $str .= dewikify($wikitype, $returns) . "\n";
+            $str .= "$returns\n";
         }
 
         if (defined $examples) {
@@ -2385,6 +3116,8 @@ __EOF__
                 s/\A\/*//;
                 s/\A\.BR\s+//;  # dewikify added this, but we want to handle it.
                 s/\A\.I\s+//;  # dewikify added this, but we want to handle it.
+                s/\A\.PP\s*//;  # dewikify added this, but we want to handle it.
+                s/\\\(bu//;  # dewikify added this, but we want to handle it.
                 s/\A\s*[\:\*\-]\s*//;
                 s/\A\s+//;
                 s/\s+\Z//;
@@ -2622,6 +3355,7 @@ __EOF__
             $str .= "    \\begin{tabular}{ | l | p{0.75\\textwidth} |}\n";
             $str .= "    \\hline\n";
 
+            # !!! FIXME: this table parsing has gotten complicated and is pasted three times in this file; move it to a subroutine!
             my @lines = split /\n/, $params;
             if ($wikitype eq 'mediawiki') {
                 die("Unexpected data parsing MediaWiki table") if (shift @lines ne '{|');  # Dump the '{|' start
@@ -2642,22 +3376,29 @@ __EOF__
             } elsif ($wikitype eq 'md') {
                 my $l;
                 $l = shift @lines;
-                die("Unexpected data parsing Markdown table") if (not $l =~ /\A\s*\|\s*\|\s*\|\s*\Z/);
+                die("Unexpected data parsing Markdown table") if (not $l =~ /\A(\s*\|)?\s*\|\s*\|\s*\|\s*\Z/);
                 $l = shift @lines;
-                die("Unexpected data parsing Markdown table") if (not $l =~ /\A\s*\|\s*\-*\s*\|\s*\-*\s*\|\s*\Z/);
+                die("Unexpected data parsing Markdown table") if (not $l =~ /\A\s*(\|\s*\-*\s*)?\|\s*\-*\s*\|\s*\-*\s*\|\s*\Z/);
                 while (scalar(@lines) >= 1) {
                     $l = shift @lines;
-                    if ($l =~ /\A\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*\Z/) {
-                        my $name = $1;
-                        my $desc = $2;
-                        $name =~ s/\A\*\*(.*?)\*\*/$1/;
-                        $name =~ s/\A\'\'\'(.*?)\'\'\'/$1/;
-                        $name = escLaTeX($name);
-                        $desc = dewikify($wikitype, $desc);
-                        $str .= "    \\textbf{$name} & $desc \\\\ \\hline\n";
+                    my $name;
+                    my $desc;
+                    if ($l =~ /\A\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*\Z/) {
+                        # c datatype is $1, but we don't care about it here.
+                        $name = $2;
+                        $desc = $3;
+                    } elsif ($l =~ /\A\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*\Z/) {
+                        $name = $1;
+                        $desc = $2;
                     } else {
                         last;  # we seem to have run out of table.
                     }
+
+                    $name =~ s/\A\*\*(.*?)\*\*/$1/;
+                    $name =~ s/\A\'\'\'(.*?)\'\'\'/$1/;
+                    $name = escLaTeX($name);
+                    $desc = dewikify($wikitype, $desc);
+                    $str .= "    \\textbf{$name} & $desc \\\\ \\hline\n";
                 }
             } else {
                 die("write me");
@@ -2668,8 +3409,10 @@ __EOF__
         }
 
         if (defined $returns) {
+            $returns = dewikify($wikitype, $returns);
+            $returns =~ s/\A\(.*?\)\s*//;  # Chop datatype in parentheses off the front.
             $str .= "\\subsection{Return Value}\n\n";
-            $str .= dewikify($wikitype, $returns) . "\n";
+            $str .= "$returns\n";
         }
 
         if (defined $remarks) {

@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2024 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -26,6 +26,10 @@
 
 #import <UIKit/UIKit.h>
 
+#include "../../video/uikit/SDL_uikitevents.h"  // For SDL_UpdateLifecycleObserver()
+
+static void CleanupApp(SDL_AppResult result);
+
 @interface SDLIosMainCallbacksDisplayLink : NSObject
 @property(nonatomic, retain) CADisplayLink *displayLink;
 - (void)appIteration:(CADisplayLink *)sender;
@@ -34,12 +38,36 @@
 
 static SDLIosMainCallbacksDisplayLink *globalDisplayLink;
 
+static void SDLCALL MainCallbackRateHintChanged(void *userdata, const char *name, const char *oldValue, const char *newValue)
+{
+    CADisplayLink *displayLink = (__bridge CADisplayLink *)userdata;
+    const float rate = newValue ? (float)SDL_atof(newValue) : 0.0f;
+    if (rate > 0.0f) {
+        if (@available(iOS 15.0, tvOS 15.0, *)) {
+            displayLink.preferredFrameRateRange = CAFrameRateRangeMake((rate * 2) / 3, rate, rate);
+        } else {
+            displayLink.preferredFramesPerSecond = (NSInteger)rate;
+        }
+    }
+}
+
 @implementation SDLIosMainCallbacksDisplayLink
 
 - (instancetype)init:(SDL_AppIterate_func)_appiter quitfunc:(SDL_AppQuit_func)_appquit;
 {
     if ((self = [super init])) {
         self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(appIteration:)];
+        // Enable high refresh rates on iOS
+        // To enable this on phones, you should add the following line to Info.plist:
+        // <key>CADisableMinimumFrameDurationOnPhone</key> <true/>
+        // If main callbacks are used then this CADisplayLink will affect framerate, not one in SDL_uikitviewcontroller.
+        if (@available(iOS 15.0, tvOS 15.0, *)) {
+            const SDL_DisplayMode *mode = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
+            if (mode && mode->refresh_rate > 60.0f) {
+                int frame_rate = (int)mode->refresh_rate;
+                self.displayLink.preferredFrameRateRange = CAFrameRateRangeMake((frame_rate * 2) / 3, frame_rate, frame_rate);
+            }
+        }
         [self.displayLink addToRunLoop:[NSRunLoop currentRunLoop] forMode:NSDefaultRunLoopMode];
     }
     return self;
@@ -47,32 +75,50 @@ static SDLIosMainCallbacksDisplayLink *globalDisplayLink;
 
 - (void)appIteration:(CADisplayLink *)sender
 {
-    const int rc = SDL_IterateMainCallbacks(SDL_TRUE);
-    if (rc != 0) {
-        [self.displayLink invalidate];
-        self.displayLink = nil;
-        globalDisplayLink = nil;
-        SDL_QuitMainCallbacks();
-        exit((rc < 0) ? 1 : 0);
+    const SDL_AppResult result = SDL_IterateMainCallbacks(true);
+    if (result != SDL_APP_CONTINUE) {
+        CleanupApp(result);
+        SDL_UpdateLifecycleObserver();
+        exit((result == SDL_APP_FAILURE) ? 1 : 0);
     }
 }
 @end
 
+static void CleanupApp(SDL_AppResult result)
+{
+    if (globalDisplayLink != nil) {
+        [globalDisplayLink.displayLink invalidate];
+        globalDisplayLink.displayLink = nil;
+        globalDisplayLink = nil;
+    }
+    SDL_QuitMainCallbacks(result);  // we need to call this directly because we won't be returning from here.
+}
+
+void SDL_MainCallbacksSawEventTerminating(SDL_AtomicInt *apprc)
+{
+    // We leave `result` alone, so if SDL_AppEvent didn't set something else, SDL_APP_CONTINUE will signify the app is terminating in an unexpected way during SDL_AppQuit.
+    const SDL_AppResult result = (SDL_AppResult) SDL_GetAtomicInt(apprc);
+    CleanupApp(result);
+}
+
 // SDL_RunApp will land in UIApplicationMain, which calls SDL_main from postFinishLaunch, which calls this.
 // When we return from here, we're living in the RunLoop, and a CADisplayLink is firing regularly for us.
-int SDL_EnterAppMainCallbacks(int argc, char* argv[], SDL_AppInit_func appinit, SDL_AppIterate_func appiter, SDL_AppEvent_func appevent, SDL_AppQuit_func appquit)
+int SDL_EnterAppMainCallbacks(int argc, char *argv[], SDL_AppInit_func appinit, SDL_AppIterate_func appiter, SDL_AppEvent_func appevent, SDL_AppQuit_func appquit)
 {
-    const int rc = SDL_InitMainCallbacks(argc, argv, appinit, appiter, appevent, appquit);
-    if (rc == 0) {
+    SDL_AppResult rc = SDL_InitMainCallbacks(argc, argv, appinit, appiter, appevent, appquit);
+    if (rc == SDL_APP_CONTINUE) {
         globalDisplayLink = [[SDLIosMainCallbacksDisplayLink alloc] init:appiter quitfunc:appquit];
-        if (globalDisplayLink != nil) {
+        if (globalDisplayLink == nil) {
+            rc = SDL_APP_FAILURE;
+        } else {
+            SDL_AddHintCallback(SDL_HINT_MAIN_CALLBACK_RATE, MainCallbackRateHintChanged, (__bridge void *)globalDisplayLink.displayLink);
             return 0;  // this will fall all the way out of SDL_main, where UIApplicationMain will keep running the RunLoop.
         }
     }
 
     // appinit requested quit, just bounce out now.
-    SDL_QuitMainCallbacks();
-    exit((rc < 0) ? 1 : 0);
+    SDL_QuitMainCallbacks(rc);
+    exit((rc == SDL_APP_FAILURE) ? 1 : 0);
 
     return 1;  // just in case.
 }

@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2024 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -31,22 +31,36 @@
 
 @property(nonatomic, assign) id pasteboardObserver;
 
+@property(nonatomic, assign) bool setting_clipboard;
+
 @end
 
 #ifdef SDL_PLATFORM_VISIONOS
-CGRect UIKit_ComputeViewFrame(SDL_Window *window);
+extern CGRect UIKit_ComputeViewFrame(SDL_Window *window);
 #else
-CGRect UIKit_ComputeViewFrame(SDL_Window *window, UIScreen *screen);
+extern CGRect UIKit_ComputeViewFrame(SDL_Window *window, UIScreen *screen);
 #endif
 
-#endif /* __OBJC__ */
+extern API_AVAILABLE(ios(13.0), tvos(13.0)) UIWindowScene *UIKit_GetActiveWindowScene(void);
+#ifndef SDL_PLATFORM_VISIONOS
+extern API_AVAILABLE(ios(13.0), tvos(13.0)) UIWindowScene *UIKit_GetWindowSceneForScreen(UIScreen *screen);
+#endif
 
-int UIKit_SuspendScreenSaver(SDL_VideoDevice *_this);
+extern void UIKit_SetGameControllerInteraction(bool enabled);
+extern void UIKit_SetViewGameControllerInteraction(UIView *view, bool enabled);
 
-void UIKit_ForceUpdateHomeIndicator(void);
+#if !defined(SDL_PLATFORM_TVOS) && !defined(SDL_PLATFORM_VISIONOS)
+extern UIInterfaceOrientation UIKit_GetInterfaceOrientation(void);
+#endif
 
-SDL_bool UIKit_IsSystemVersionAtLeast(double version);
+#endif // __OBJC__
 
-SDL_SystemTheme UIKit_GetSystemTheme(void);
+extern bool UIKit_SuspendScreenSaver(SDL_VideoDevice *_this);
 
-#endif /* SDL_uikitvideo_h_ */
+extern void UIKit_ForceUpdateHomeIndicator(void);
+
+extern bool UIKit_IsSystemVersionAtLeast(double version);
+
+extern SDL_SystemTheme UIKit_GetSystemTheme(void);
+
+#endif // SDL_uikitvideo_h_

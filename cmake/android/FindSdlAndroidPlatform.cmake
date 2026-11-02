@@ -55,7 +55,7 @@ This module responds to the flags:
 
 #]=======================================================================]
 
-cmake_minimum_required(VERSION 3.7)
+cmake_minimum_required(VERSION 3.7...3.28)
 
 if(NOT PROJECT_NAME MATCHES "^SDL.*")
     message(WARNING "This module is internal to SDL and is currently not supported.")
@@ -65,7 +65,7 @@ function(_sdl_is_valid_android_platform_root RESULT VERSION PLATFORM_ROOT)
     set(result FALSE)
     set(version -1)
 
-    string(REGEX MATCH "/android-([0-9]+)$" root_match "${PLATFORM_ROOT}")
+    string(REGEX MATCH "/android-([0-9][0-9.]*)$" root_match "${PLATFORM_ROOT}")
     if(root_match AND EXISTS "${PLATFORM_ROOT}/android.jar")
         set(result TRUE)
         set(version "${CMAKE_MATCH_1}")
@@ -88,7 +88,7 @@ function(_sdl_find_android_platform_root ROOT)
     set(max_platform_root "")
     foreach(platform_root IN LISTS platform_roots)
       _sdl_is_valid_android_platform_root(is_valid platform_version "${platform_root}")
-      if(is_valid AND platform_version GREATER max_platform_version)
+      if(is_valid AND platform_version VERSION_GREATER max_platform_version)
         set(max_platform_version "${platform_version}")
         set(max_platform_root "${platform_root}")
       endif()
@@ -104,8 +104,9 @@ endfunction()
 set(SDL_ANDROID_PLATFORM_ANDROID_JAR "SDL_ANDROID_PLATFORM_ANDROID_JAR-NOTFOUND")
 
 if(NOT DEFINED SDL_ANDROID_PLATFORM_ROOT)
-  _sdl_find_android_platform_root(SDL_ANDROID_PLATFORM_ROOT)
-  set(SDL_ANDROID_PLATFORM_ROOT "${SDL_ANDROID_PLATFORM_ROOT}" CACHE PATH "Path of Android platform")
+  _sdl_find_android_platform_root(_new_sdl_android_platform_root)
+  set(SDL_ANDROID_PLATFORM_ROOT "${_new_sdl_android_platform_root}" CACHE PATH "Path of Android platform")
+  unset(_new_sdl_android_platform_root)
 endif()
 if(SDL_ANDROID_PLATFORM_ROOT)
   _sdl_is_valid_android_platform_root(_valid SDL_ANDROID_PLATFORM_VERSION "${SDL_ANDROID_PLATFORM_ROOT}")

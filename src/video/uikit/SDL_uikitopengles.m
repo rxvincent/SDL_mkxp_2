@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2024 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -31,11 +31,12 @@
 #include "../../events/SDL_keyboard_c.h"
 #include "../../events/SDL_mouse_c.h"
 #include "../../power/uikit/SDL_syspower.h"
+#include "../../SDL_hints_c.h"
 #include <dlfcn.h>
 
 @interface SDLEAGLContext : EAGLContext
 
-/* The OpenGL ES context owns a view / drawable. */
+// The OpenGL ES context owns a view / drawable.
 @property(nonatomic, strong) SDL_uikitopenglview *sdlView;
 
 @end
@@ -60,9 +61,9 @@ SDL_FunctionPointer UIKit_GL_GetProcAddress(SDL_VideoDevice *_this, const char *
 }
 
 /*
-  note that SDL_GL_DeleteContext makes it current without passing the window
+  note that SDL_GL_DestroyContext makes it current without passing the window
 */
-int UIKit_GL_MakeCurrent(SDL_VideoDevice *_this, SDL_Window *window, SDL_GLContext context)
+bool UIKit_GL_MakeCurrent(SDL_VideoDevice *_this, SDL_Window *window, SDL_GLContext context)
 {
     @autoreleasepool {
         SDLEAGLContext *eaglcontext = (__bridge SDLEAGLContext *)context;
@@ -76,26 +77,26 @@ int UIKit_GL_MakeCurrent(SDL_VideoDevice *_this, SDL_Window *window, SDL_GLConte
         }
     }
 
-    return 0;
+    return true;
 }
 
-int UIKit_GL_LoadLibrary(SDL_VideoDevice *_this, const char *path)
+bool UIKit_GL_LoadLibrary(SDL_VideoDevice *_this, const char *path)
 {
     /* We shouldn't pass a path to this function, since we've already loaded the
      * library. */
     if (path != NULL) {
         return SDL_SetError("iOS GL Load Library just here for compatibility");
     }
-    return 0;
+    return true;
 }
 
-int UIKit_GL_SwapWindow(SDL_VideoDevice *_this, SDL_Window *window)
+bool UIKit_GL_SwapWindow(SDL_VideoDevice *_this, SDL_Window *window)
 {
     @autoreleasepool {
         SDLEAGLContext *context = (__bridge SDLEAGLContext *)SDL_GL_GetCurrentContext();
 
 #ifdef SDL_POWER_UIKIT
-        /* Check once a frame to see if we should turn off the battery monitor. */
+        // Check once a frame to see if we should turn off the battery monitor.
         SDL_UIKit_UpdateBatteryMonitoring();
 #endif
 
@@ -105,7 +106,7 @@ int UIKit_GL_SwapWindow(SDL_VideoDevice *_this, SDL_Window *window)
          * We don't pump events here because we don't want iOS application events
          * (low memory, terminate, etc.) to happen inside low level rendering. */
     }
-    return 0;
+    return true;
 }
 
 SDL_GLContext UIKit_GL_CreateContext(SDL_VideoDevice *_this, SDL_Window *window)
@@ -113,7 +114,7 @@ SDL_GLContext UIKit_GL_CreateContext(SDL_VideoDevice *_this, SDL_Window *window)
     @autoreleasepool {
         SDLEAGLContext *context = nil;
         SDL_uikitopenglview *view;
-        SDL_UIKitWindowData *data = (__bridge SDL_UIKitWindowData *)window->driverdata;
+        SDL_UIKitWindowData *data = (__bridge SDL_UIKitWindowData *)window->internal;
         CGRect frame = UIKit_ComputeViewFrame(window, data.uiwindow.screen);
         EAGLSharegroup *sharegroup = nil;
         CGFloat scale = 1.0;
@@ -125,7 +126,7 @@ SDL_GLContext UIKit_GL_CreateContext(SDL_VideoDevice *_this, SDL_Window *window)
          * versions. */
         EAGLRenderingAPI api = major;
 
-        /* iOS currently doesn't support GLES >3.0. */
+        // iOS currently doesn't support GLES >3.0.
         if (major > 3 || (major == 3 && minor > 0)) {
             SDL_SetError("OpenGL ES %d.%d context could not be created", major, minor);
             return NULL;
@@ -153,7 +154,13 @@ SDL_GLContext UIKit_GL_CreateContext(SDL_VideoDevice *_this, SDL_Window *window)
             return NULL;
         }
 
-        /* construct our view, passing in SDL's OpenGL configuration data */
+        int srgb = _this->gl_config.framebuffer_srgb_capable;
+        const char *srgbhint = SDL_GetHint(SDL_HINT_OPENGL_FORCE_SRGB_FRAMEBUFFER);
+        if (srgbhint && *srgbhint) {
+            srgb = SDL_GetStringBoolean(srgbhint, false) ? 1 : 0;  // there is no "skip" here, since initWithFrame expects it, so we'll treat it as false.
+        }
+
+        // construct our view, passing in SDL's OpenGL configuration data
         view = [[SDL_uikitopenglview alloc] initWithFrame:frame
                                                     scale:scale
                                             retainBacking:_this->gl_config.retained_backing
@@ -163,7 +170,7 @@ SDL_GLContext UIKit_GL_CreateContext(SDL_VideoDevice *_this, SDL_Window *window)
                                                     aBits:_this->gl_config.alpha_size
                                                 depthBits:_this->gl_config.depth_size
                                               stencilBits:_this->gl_config.stencil_size
-                                                     sRGB:_this->gl_config.framebuffer_srgb_capable
+                                                     sRGB:srgb
                                              multisamples:samples
                                                   context:context];
 
@@ -171,21 +178,26 @@ SDL_GLContext UIKit_GL_CreateContext(SDL_VideoDevice *_this, SDL_Window *window)
             return NULL;
         }
 
-        /* The context owns the view / drawable. */
+        SDL_PropertiesID props = SDL_GetWindowProperties(window);
+        SDL_SetNumberProperty(props, SDL_PROP_WINDOW_UIKIT_OPENGL_FRAMEBUFFER_NUMBER, view.drawableFramebuffer);
+        SDL_SetNumberProperty(props, SDL_PROP_WINDOW_UIKIT_OPENGL_RENDERBUFFER_NUMBER, view.drawableRenderbuffer);
+        SDL_SetNumberProperty(props, SDL_PROP_WINDOW_UIKIT_OPENGL_RESOLVE_FRAMEBUFFER_NUMBER, view.msaaResolveFramebuffer);
+
+        // The context owns the view / drawable.
         context.sdlView = view;
 
-        if (UIKit_GL_MakeCurrent(_this, window, (__bridge SDL_GLContext)context) < 0) {
-            UIKit_GL_DeleteContext(_this, (SDL_GLContext)CFBridgingRetain(context));
+        if (!UIKit_GL_MakeCurrent(_this, window, (__bridge SDL_GLContext)context)) {
+            UIKit_GL_DestroyContext(_this, (SDL_GLContext)CFBridgingRetain(context));
             return NULL;
         }
 
-        /* We return a +1'd context. The window's driverdata owns the view (via
+        /* We return a +1'd context. The window's internal owns the view (via
          * MakeCurrent.) */
         return (SDL_GLContext)CFBridgingRetain(context);
     }
 }
 
-int UIKit_GL_DeleteContext(SDL_VideoDevice *_this, SDL_GLContext context)
+bool UIKit_GL_DestroyContext(SDL_VideoDevice *_this, SDL_GLContext context)
 {
     @autoreleasepool {
         /* The context was retained in SDL_GL_CreateContext, so we release it
@@ -193,7 +205,7 @@ int UIKit_GL_DeleteContext(SDL_VideoDevice *_this, SDL_GLContext context)
          * context is deallocated. */
         CFRelease(context);
     }
-    return 0;
+    return true;
 }
 
 void UIKit_GL_RestoreCurrentContext(void)
@@ -213,4 +225,4 @@ void UIKit_GL_RestoreCurrentContext(void)
     }
 }
 
-#endif /* SDL_VIDEO_DRIVER_UIKIT */
+#endif // SDL_VIDEO_DRIVER_UIKIT

@@ -6,6 +6,8 @@ From the developer's point of view, macOS is a sort of hybrid Mac and
 Unix system, and you have the option of using either traditional
 command line tools or Apple's IDE Xcode.
 
+SDL supports building with Xcode 12.2 and the macOS 11.0 SDK or newer, and deploying to macOS 10.13 and newer.
+
 # Command Line Build
 
 To build SDL using the command line, use the CMake build script:
@@ -13,7 +15,7 @@ To build SDL using the command line, use the CMake build script:
 ```bash
 mkdir build
 cd build
-cmake ..
+cmake .. -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13
 cmake --build .
 sudo cmake --install .
 ```
@@ -25,15 +27,14 @@ You can also build SDL as a Universal library (a single binary for both
 ```bash
 mkdir build
 cd build
-cmake .. "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
+cmake .. "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13
 cmake --build .
 sudo cmake --install .
 ```
 
-Please note that building SDL requires at least Xcode 6 and the 10.9 SDK.
-PowerPC support for macOS has been officially dropped as of SDL 2.0.2.
-32-bit Intel and macOS 10.8 runtime support has been officially dropped as
-of SDL 2.24.0.
+If you are getting errors building SDL_mfijoystick.m with Xcode 12.2, find your SDKs
+directory and move MacOSX10.15.sdk out of the way so it isn't accidentally being used
+by the build environment.
 
 To use the library once it's built, you essential have two possibilities:
 use the traditional autoconf/automake/make method, or use Xcode.
@@ -52,8 +53,9 @@ NSApplicationDelegate implementation:
 ```objc
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender
 {
-    if (SDL_GetEventState(SDL_EVENT_QUIT) == SDL_ENABLE) {
+    if (SDL_EventEnabled(SDL_EVENT_QUIT)) {
         SDL_Event event;
+        SDL_zero(event);
         event.type = SDL_EVENT_QUIT;
         SDL_PushEvent(&event);
     }
@@ -63,16 +65,19 @@ NSApplicationDelegate implementation:
 
 - (BOOL)application:(NSApplication *)theApplication openFile:(NSString *)filename
 {
-    if (SDL_GetEventState(SDL_EVENT_DROP_FILE) == SDL_ENABLE) {
+    if (SDL_EventEnabled(SDL_EVENT_DROP_FILE)) {
         SDL_Event event;
+        SDL_zero(event);
         event.type = SDL_EVENT_DROP_FILE;
         event.drop.file = SDL_strdup([filename UTF8String]);
-        return (SDL_PushEvent(&event) > 0);
+        return SDL_PushEvent(&event);
     }
 
     return NO;
 }
 ```
+
+SDL is [not designed to be used in setuid or setgid executables](README-platforms.md#setuid).
 
 # Using the Simple DirectMedia Layer with a traditional Makefile
 
@@ -228,10 +233,10 @@ Some things that may be of interest about how it all works...
 ## Working directory
 
 In SDL 1.2, the working directory of your SDL app is by default set to its
-parent, but this is no longer the case in SDL 2.0. SDL2 does change the
-working directory, which means it'll be whatever the command line prompt
-that launched the program was using, or if launched by double-clicking in
-the finger, it will be "/", the _root of the filesystem_. Plan accordingly!
+parent, but this is no longer the case in SDL 2.0 and later. SDL2 does not
+change the working directory, which means it'll be whatever the command line
+prompt that launched the program was using, or if launched by double-clicking
+in the Finder, it will be "/", the _root of the filesystem_. Plan accordingly!
 You can use SDL_GetBasePath() to find where the program is running from and
 chdir() there directly.
 
@@ -244,6 +249,22 @@ which sets up the working directory and calls your main() method.
 You are free to modify your Cocoa app with generally no consequence
 to SDL. You cannot, however, easily change the SDL window itself.
 Functionality may be added in the future to help this.
+
+
+## Raw Mouse Input
+
+SDL uses the Game Controller framework's GCMouse API to provide raw,
+unaccelerated mouse input in relative mode. This is ideal for games
+and applications requiring precise 1:1 mouse movement.
+
+On versions older than macOS 11.0 (Big Sur), SDL would fall back to
+NSEvent-based mouse input, which includes system mouse acceleration.
+
+To use accelerated (system-scaled) mouse movement on macOS 14.0+, set the hint:
+
+```c
+SDL_SetHint(SDL_HINT_MOUSE_RELATIVE_SYSTEM_SCALE, "1");
+```
 
 # Bug reports
 

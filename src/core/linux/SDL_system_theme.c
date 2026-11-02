@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2024 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -24,6 +24,7 @@
 #include "SDL_system_theme.h"
 #include "../../video/SDL_sysvideo.h"
 
+#include <stdio.h>
 #include <unistd.h>
 
 #define PORTAL_DESTINATION "org.freedesktop.portal.Desktop"
@@ -44,16 +45,16 @@ typedef struct SystemThemeData
 
 static SystemThemeData system_theme_data;
 
-static SDL_bool DBus_ExtractThemeVariant(DBusMessageIter *iter, SDL_SystemTheme *theme) {
+static bool DBus_ExtractThemeVariant(DBusMessageIter *iter, SDL_SystemTheme *theme) {
     SDL_DBusContext *dbus = system_theme_data.dbus;
     Uint32 color_scheme;
     DBusMessageIter variant_iter;
 
     if (dbus->message_iter_get_arg_type(iter) != DBUS_TYPE_VARIANT)
-        return SDL_FALSE;
+        return false;
     dbus->message_iter_recurse(iter, &variant_iter);
     if (dbus->message_iter_get_arg_type(&variant_iter) != DBUS_TYPE_UINT32)
-        return SDL_FALSE;
+        return false;
     dbus->message_iter_get_basic(&variant_iter, &color_scheme);
     switch (color_scheme) {
         case 0:
@@ -66,7 +67,7 @@ static SDL_bool DBus_ExtractThemeVariant(DBusMessageIter *iter, SDL_SystemTheme 
             *theme = SDL_SYSTEM_THEME_LIGHT;
             break;
     }
-    return SDL_TRUE;
+    return true;
 }
 
 static DBusHandlerResult DBus_MessageFilter(DBusConnection *conn, DBusMessage *msg, void *data) {
@@ -77,7 +78,7 @@ static DBusHandlerResult DBus_MessageFilter(DBusConnection *conn, DBusMessage *m
         const char *namespace, *key;
 
         dbus->message_iter_init(msg, &signal_iter);
-        /* Check if the parameters are what we expect */
+        // Check if the parameters are what we expect
         if (dbus->message_iter_get_arg_type(&signal_iter) != DBUS_TYPE_STRING)
             goto not_our_signal;
         dbus->message_iter_get_basic(&signal_iter, &namespace);
@@ -106,7 +107,7 @@ not_our_signal:
     return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
 }
 
-SDL_bool SDL_SystemTheme_Init(void)
+bool SDL_SystemTheme_Init(void)
 {
     SDL_DBusContext *dbus = SDL_DBus_GetContext();
     DBusMessage *msg;
@@ -116,7 +117,7 @@ SDL_bool SDL_SystemTheme_Init(void)
     system_theme_data.theme = SDL_SYSTEM_THEME_UNKNOWN;
     system_theme_data.dbus = dbus;
     if (!dbus) {
-        return SDL_FALSE;
+        return false;
     }
 
     msg = dbus->message_new_method_call(PORTAL_DESTINATION, PORTAL_PATH, PORTAL_INTERFACE, PORTAL_METHOD);
@@ -127,7 +128,7 @@ SDL_bool SDL_SystemTheme_Init(void)
                 DBusMessageIter reply_iter, variant_outer_iter;
 
                 dbus->message_iter_init(reply, &reply_iter);
-                /* The response has signature <<u>> */
+                // The response has signature <<u>>
                 if (dbus->message_iter_get_arg_type(&reply_iter) != DBUS_TYPE_VARIANT)
                     goto incorrect_type;
                 dbus->message_iter_recurse(&reply_iter, &variant_outer_iter);
@@ -147,10 +148,58 @@ incorrect_type:
     dbus->connection_add_filter(dbus->session_conn,
                                 &DBus_MessageFilter, dbus, NULL);
     dbus->connection_flush(dbus->session_conn);
-    return SDL_TRUE;
+    return true;
+}
+
+SDL_SystemTheme UbuntuTouch_GetSystemTheme(void)
+{
+    SDL_SystemTheme theme = SDL_SYSTEM_THEME_UNKNOWN;
+    FILE *config_file = NULL;
+    char *line = NULL;
+    size_t line_alloc = 0;
+    ssize_t line_size = 0;
+    bool is_in_general_category = false;
+
+    // "Lomiri": Ubuntu Touch 20.04+
+    // "Ubuntu": Ubuntu Touch 16.04
+    config_file = fopen("/home/phablet/.config/lomiri-ui-toolkit/theme.ini", "r");
+    if (!config_file) {
+        config_file = fopen("/home/phablet/.config/ubuntu-ui-toolkit/theme.ini", "r");
+        if (!config_file) {
+            return SDL_SYSTEM_THEME_UNKNOWN;
+        }
+    }
+
+    while ((line_size = getline(&line, &line_alloc, config_file)) != -1) {
+        if (line_size >= 1 && line[0] == '[') {
+            is_in_general_category = SDL_strcmp(line, "[General]\n") == 0;
+        } else if (is_in_general_category && SDL_strncmp(line, "theme=", 6) == 0) {
+            if (SDL_strcmp(line, "theme=Lomiri.Components.Themes.SuruDark\n") == 0 ||
+                SDL_strcmp(line, "theme=Ubuntu.Components.Themes.SuruDark\n") == 0) {
+                theme = SDL_SYSTEM_THEME_DARK;
+            } else if (SDL_strcmp(line, "theme=Lomiri.Components.Themes.Ambiance\n") == 0 ||
+                       SDL_strcmp(line, "theme=Ubuntu.Components.Themes.Ambiance\n") == 0) {
+                theme = SDL_SYSTEM_THEME_LIGHT;
+            } else {
+                theme = SDL_SYSTEM_THEME_UNKNOWN;
+            }
+        }
+    }
+
+    free(line); // This should NOT be SDL_free()
+
+    fclose(config_file);
+
+    return theme;
 }
 
 SDL_SystemTheme SDL_SystemTheme_Get(void)
 {
+    if (system_theme_data.theme == SDL_SYSTEM_THEME_UNKNOWN) {
+        // TODO: Use inotify to watch for changes, so that the config file
+        // doesn't need to be checked each time.
+        return UbuntuTouch_GetSystemTheme();
+    }
+
     return system_theme_data.theme;
 }

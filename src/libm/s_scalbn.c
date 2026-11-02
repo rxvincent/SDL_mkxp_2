@@ -19,11 +19,6 @@
 
 #include "math_libm.h"
 #include "math_private.h"
-#include <limits.h>
-
-#ifdef __WATCOMC__ /* Watcom defines huge=__huge */
-#undef huge
-#endif
 
 static const double
 two54  = 1.80143985094819840000e+16, /* 0x43500000, 0x00000000 */

@@ -9,8 +9,8 @@ Windows (GDK) and  Xbox One/Xbox Series (GDKX) are both supported and all the re
 Requirements
 ------------
 
-* Microsoft Visual Studio 2022 (in theory, it should also work in 2017 or 2019, but this has not been tested)
-* Microsoft GDK October 2023 Update 1 or newer (public release [here](https://github.com/microsoft/GDK/releases/tag/October_2023_Update_1))
+* Microsoft Visual Studio 2022 (in theory, it should also work in 2019 or 2026, but this has not been tested)
+* Microsoft GDK April 2026 Update 3 or newer (public release [here](https://github.com/microsoft/GDK/releases/tag/April-2026-Update-3-v2604.3.7874))
 * For Xbox, you will need the corresponding GDKX version (licensed developers only)
 * To publish a package or successfully authenticate a user, you will need to create an app id/configure services in Partner Center. However, for local testing purposes (without authenticating on Xbox Live), the test identifiers used by the GDK test programs in the included solution work.
 
@@ -28,11 +28,12 @@ The Windows GDK port supports the full set of Win32 APIs, renderers, controllers
 
   * An implementation on `WinMain` that performs the above GDK setup that you can use by #include'ing SDL_main.h in the source file that includes your standard main() function. If you are unable to do this, you can instead manually call `SDL_RunApp` from your entry point, passing in your `SDL_main` function and `NULL` as the parameters. To use `SDL_RunApp`, `#define SDL_MAIN_HANDLED` before `#include <SDL3/SDL_main.h>`.
   * Global task queue callbacks are dispatched during `SDL_PumpEvents` (which is also called internally if using `SDL_PollEvent`).
-  * You can get the handle of the global task queue through `SDL_GDKGetTaskQueue`, if needed. When done with the queue, be sure to use `XTaskQueueCloseHandle` to decrement the reference count (otherwise it will cause a resource leak).
+  * You can get the handle of the global task queue through `SDL_GetGDKTaskQueue`, if needed. When done with the queue, be sure to use `XTaskQueueCloseHandle` to decrement the reference count (otherwise it will cause a resource leak).
 
 * Single-player games have some additional features available:
-  * Call `SDL_GDKGetDefaultUser` to get the default XUserHandle pointer.
-  * `SDL_GetPrefPath` still works, but only for single-player titles.
+  * Call `SDL_GetGDKDefaultUser` to get the default XUserHandle pointer.
+  * `SDL_GetPrefPath` and `SDL_Storage` still work, but only for single-player titles.
+    * To enable support for these APIs, use `SDL_SetHint` to set `SDL_GDK_SERVICE_CONFIGURATION_ID` to your SCID string at startup (it should be formatted like `"00000000-0000-0000-0000-000000000000"`)
 
   These functions mostly wrap around async APIs, and thus should be treated as synchronous alternatives. Also note that the single-player functions return on any OS errors, so be sure to validate the return values!
 
@@ -75,7 +76,7 @@ While the Gaming.Desktop.x64 configuration sets most of the required settings, t
 * Under Linker > Input > Additional Dependencies, you need the following:
   * `SDL3.lib`
   * `xgameruntime.lib`
-  * `../Microsoft.Xbox.Services.GDK.C.Thunks.lib`
+  * `Microsoft.Xbox.Services.C.Thunks.lib`
 * Note that in general, the GDK libraries depend on the MSVC C/C++ runtime, so there is no way to remove this dependency from a GDK program that links against GDK.
 
 ### 4. Setting up SDL_main ###
@@ -87,10 +88,9 @@ Rather than using your own implementation of `WinMain`, it's recommended that yo
 The game will not launch in the debugger unless required DLLs are included in the directory that contains the game's .exe file. You need to make sure that the following files are copied into the directory:
 
 * Your SDL3.dll
-* "$(Console_GRDKExtLibRoot)Xbox.Services.API.C\DesignTime\CommonConfiguration\Neutral\Lib\Release\Microsoft.Xbox.Services.GDK.C.Thunks.dll"
+* Microsoft.Xbox.Services.C.Thunks.dll
 * XCurl.dll
-
-You can either copy these in a post-build step, or you can add the dlls into the project and set its Configuration Properties > General > Item type to "Copy file," which will also copy them into the output directory.
+* libHttpClient.dll
 
 ### 6. Setting up MicrosoftGame.config ###
 
@@ -151,13 +151,73 @@ In general, the same process in the Windows GDK instructions work. There are jus
 * For Xbox Series consoles, use the Gaming.Xbox.Scarlett.x64 target
 * The Xbox One target sets the `SDL_PLATFORM_XBOXONE` define and the Xbox Series target sets the `SDL_PLATFORM_XBOXSERIES` define
 * You don't need to link against the Xbox.Services Thunks lib nor include that dll in your package (it doesn't exist for Xbox)
-* The shader blobs for Xbox are created in a pre-build step for the Xbox targets, rather than included in the source (due to NDA and version compatability reasons)
+* The shader blobs for Xbox are created in a pre-build step for the Xbox targets, rather than included in the source (due to NDA and version compatibility reasons)
 * To create a package, use:
   `makepkg pack /f PackageLayout.xml /lt /d . /pd Package`
 * To install the package, use:
   `xbapp install [PACKAGE].xvc`
 * For some reason, if you make changes that require SDL3.dll to build, and you are running through the debugger (instead of a package), you have to rebuild your .exe target for the debugger to recognize the dll has changed and needs to be transferred to the console again
 * While there are successful releases of Xbox titles using this port, it is not as extensively tested as other targets
+
+Xbox Suspend/Resume Handling
+----------------------------
+Xbox certification requires that applications handle Suspend and Resume lifecycle events.
+Please read the official GDK documentation for all the details, but here's what you absolutely need to know:
+- When the operating system begins suspending an application, the app must complete all pending GPU operations and then signal to the OS that it is ready for suspension.
+- When the OS resumes the application, the app must explicitly resume GPU operations.
+- If any GPU API call happens in between suspension and resuming, the application will crash or hang.
+
+Unfortunately it's impossible for SDL to know for certain when your application is ready for suspension, so it cannot handle these events internally.
+Instead, SDL provides a few `SDL_GDK*` APIs you must use to handle these events yourself.
+
+On startup, your application should call `SDL_AddEventWatch` to register a callback function which will listen for the `SDL_EVENT_DID_ENTER_BACKGROUND` and `SDL_EVENT_WILL_ENTER_FOREGROUND` events.
+This callback function will be called from a background OS thread, so when one of these events occurs, you should notify your render thread about it rather than responding directly in the callback.
+A simple thread-safe strategy for this is to add an `SDL_AtomicInt` to act as a flag for whether the OS has requested suspension, like so:
+
+```c
+static SDL_AtomicInt suspend_requested; // has the OS requested suspension?
+static bool suspended; // have we responded and entered into a "suspended" state?
+
+static bool SDLCALL GDKEventWatch(void *userdata, SDL_Event *event)
+{
+    if (event->type == SDL_EVENT_DID_ENTER_BACKGROUND) {
+        SDL_SetAtomicInt(&suspend_requested, 1); // suspend
+    } else if (event->type == SDL_EVENT_WILL_ENTER_FOREGROUND) {
+        SDL_SetAtomicInt(&suspend_requested, 0); // resume
+    }
+    return false;
+}
+
+SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
+{
+    // during startup...
+    SDL_AddEventWatch(GDKEventWatch, NULL);
+}
+
+SDL_AppResult SDL_AppIterate(void *appstate)
+{
+    // check for suspend/resume state changes
+    if (SDL_GetAtomicInt(&suspend_requested)) {
+        if (!suspended) {
+            // call SDL_GDKSuspendRenderer() if you're using the Render API
+            // call SDL_GDKSuspendGPU() if you're using the GPU API
+            suspended = true;
+            SDL_GDKSuspendComplete(); // this call is always required!
+        }
+    } else if (suspended) {
+        // call SDL_GDKResumeRenderer() if you're using the Render API
+        // call SDL_GDKResumeGPU() if you're using the GPU API
+        suspended = false;
+    }
+
+    // skip drawing if the app is suspended
+    if (!suspended) {
+        draw();
+    }
+}
+```
+
+An example of this flow with a traditional SDL main function can be found in the testgdk project.
 
 Troubleshooting
 ---------------
@@ -172,3 +232,14 @@ Furthermore, confirm that your PC is set to the correct sandbox.
 #### "The current user has already installed an unpackaged version of this app. A packaged version cannot replace this." error when installing
 
 Prior to June 2022 GDK, running from the Visual Studio debugger would still locally register the app (and it would appear on the start menu). To fix this, you have to uninstall it (it's simplest to right click on it from the start menu to uninstall it).
+
+### Missing headers / linker errors after updating to April 2026 GDK or newer
+
+Existing projects using the "old layout" of GDK may need to add the following to their vcxproj in order for GDK system headers and libraries to be found:
+```
+<PropertyGroup>
+  <LibraryPath>$(Console_SdkLibPath);$(LibraryPath)</LibraryPath>
+  <IncludePath>$(Console_SdkIncludeRoot);$(IncludePath)</IncludePath>
+</PropertyGroup>
+```
+See SDL.vcxproj for an example of this.

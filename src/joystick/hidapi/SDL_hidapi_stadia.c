@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2024 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -28,8 +28,8 @@
 
 #ifdef SDL_JOYSTICK_HIDAPI_STADIA
 
-/* Define this if you want to log all packets from the controller */
-/*#define DEBUG_STADIA_PROTOCOL*/
+// Define this if you want to log all packets from the controller
+// #define DEBUG_STADIA_PROTOCOL
 
 enum
 {
@@ -40,7 +40,7 @@ enum
 
 typedef struct
 {
-    SDL_bool rumble_supported;
+    bool rumble_supported;
     Uint8 last_state[USB_PACKET_LENGTH];
 } SDL_DriverStadia_Context;
 
@@ -51,35 +51,35 @@ static void HIDAPI_DriverStadia_RegisterHints(SDL_HintCallback callback, void *u
 
 static void HIDAPI_DriverStadia_UnregisterHints(SDL_HintCallback callback, void *userdata)
 {
-    SDL_DelHintCallback(SDL_HINT_JOYSTICK_HIDAPI_STADIA, callback, userdata);
+    SDL_RemoveHintCallback(SDL_HINT_JOYSTICK_HIDAPI_STADIA, callback, userdata);
 }
 
-static SDL_bool HIDAPI_DriverStadia_IsEnabled(void)
+static bool HIDAPI_DriverStadia_IsEnabled(void)
 {
     return SDL_GetHintBoolean(SDL_HINT_JOYSTICK_HIDAPI_STADIA, SDL_GetHintBoolean(SDL_HINT_JOYSTICK_HIDAPI, SDL_HIDAPI_DEFAULT));
 }
 
-static SDL_bool HIDAPI_DriverStadia_IsSupportedDevice(SDL_HIDAPI_Device *device, const char *name, SDL_GamepadType type, Uint16 vendor_id, Uint16 product_id, Uint16 version, int interface_number, int interface_class, int interface_subclass, int interface_protocol)
+static bool HIDAPI_DriverStadia_IsSupportedDevice(SDL_HIDAPI_Device *device, const char *name, SDL_GamepadType type, Uint16 vendor_id, Uint16 product_id, Uint16 version, int interface_number, int interface_class, int interface_subclass, int interface_protocol)
 {
     return SDL_IsJoystickGoogleStadiaController(vendor_id, product_id);
 }
 
-static SDL_bool HIDAPI_DriverStadia_InitDevice(SDL_HIDAPI_Device *device)
+static bool HIDAPI_DriverStadia_InitDevice(SDL_HIDAPI_Device *device)
 {
     SDL_DriverStadia_Context *ctx;
 
     ctx = (SDL_DriverStadia_Context *)SDL_calloc(1, sizeof(*ctx));
     if (!ctx) {
-        return SDL_FALSE;
+        return false;
     }
     device->context = ctx;
 
-    /* Check whether rumble is supported */
+    // Check whether rumble is supported
     {
         Uint8 rumble_packet[] = { 0x05, 0x00, 0x00, 0x00, 0x00 };
 
         if (SDL_hid_write(device->dev, rumble_packet, sizeof(rumble_packet)) >= 0) {
-            ctx->rumble_supported = SDL_TRUE;
+            ctx->rumble_supported = true;
         }
     }
 
@@ -88,16 +88,7 @@ static SDL_bool HIDAPI_DriverStadia_InitDevice(SDL_HIDAPI_Device *device)
     return HIDAPI_JoystickConnected(device, NULL);
 }
 
-static int HIDAPI_DriverStadia_GetDevicePlayerIndex(SDL_HIDAPI_Device *device, SDL_JoystickID instance_id)
-{
-    return -1;
-}
-
-static void HIDAPI_DriverStadia_SetDevicePlayerIndex(SDL_HIDAPI_Device *device, SDL_JoystickID instance_id, int player_index)
-{
-}
-
-static SDL_bool HIDAPI_DriverStadia_OpenJoystick(SDL_HIDAPI_Device *device, SDL_Joystick *joystick)
+static bool HIDAPI_DriverStadia_OpenJoystick(SDL_HIDAPI_Device *device, SDL_Joystick *joystick)
 {
     SDL_DriverStadia_Context *ctx = (SDL_DriverStadia_Context *)device->context;
 
@@ -105,15 +96,15 @@ static SDL_bool HIDAPI_DriverStadia_OpenJoystick(SDL_HIDAPI_Device *device, SDL_
 
     SDL_zeroa(ctx->last_state);
 
-    /* Initialize the joystick capabilities */
+    // Initialize the joystick capabilities
     joystick->nbuttons = SDL_GAMEPAD_NUM_STADIA_BUTTONS;
-    joystick->naxes = SDL_GAMEPAD_AXIS_MAX;
+    joystick->naxes = SDL_GAMEPAD_AXIS_COUNT;
     joystick->nhats = 1;
 
-    return SDL_TRUE;
+    return true;
 }
 
-static int HIDAPI_DriverStadia_RumbleJoystick(SDL_HIDAPI_Device *device, SDL_Joystick *joystick, Uint16 low_frequency_rumble, Uint16 high_frequency_rumble)
+static bool HIDAPI_DriverStadia_RumbleJoystick(SDL_HIDAPI_Device *device, SDL_Joystick *joystick, Uint16 low_frequency_rumble, Uint16 high_frequency_rumble)
 {
     SDL_DriverStadia_Context *ctx = (SDL_DriverStadia_Context *)device->context;
 
@@ -129,15 +120,10 @@ static int HIDAPI_DriverStadia_RumbleJoystick(SDL_HIDAPI_Device *device, SDL_Joy
         if (SDL_HIDAPI_SendRumble(device, rumble_packet, sizeof(rumble_packet)) != sizeof(rumble_packet)) {
             return SDL_SetError("Couldn't send rumble packet");
         }
-        return 0;
+        return true;
     } else {
         return SDL_Unsupported();
     }
-}
-
-static int HIDAPI_DriverStadia_RumbleJoystickTriggers(SDL_HIDAPI_Device *device, SDL_Joystick *joystick, Uint16 left_rumble, Uint16 right_rumble)
-{
-    return SDL_Unsupported();
 }
 
 static Uint32 HIDAPI_DriverStadia_GetJoystickCapabilities(SDL_HIDAPI_Device *device, SDL_Joystick *joystick)
@@ -151,21 +137,6 @@ static Uint32 HIDAPI_DriverStadia_GetJoystickCapabilities(SDL_HIDAPI_Device *dev
     return caps;
 }
 
-static int HIDAPI_DriverStadia_SetJoystickLED(SDL_HIDAPI_Device *device, SDL_Joystick *joystick, Uint8 red, Uint8 green, Uint8 blue)
-{
-    return SDL_Unsupported();
-}
-
-static int HIDAPI_DriverStadia_SendJoystickEffect(SDL_HIDAPI_Device *device, SDL_Joystick *joystick, const void *data, int size)
-{
-    return SDL_Unsupported();
-}
-
-static int HIDAPI_DriverStadia_SetJoystickSensorsEnabled(SDL_HIDAPI_Device *device, SDL_Joystick *joystick, SDL_bool enabled)
-{
-    return SDL_Unsupported();
-}
-
 static void HIDAPI_DriverStadia_HandleStatePacket(SDL_Joystick *joystick, SDL_DriverStadia_Context *ctx, Uint8 *data, int size)
 {
     Sint16 axis;
@@ -173,7 +144,7 @@ static void HIDAPI_DriverStadia_HandleStatePacket(SDL_Joystick *joystick, SDL_Dr
 
     // The format is the same but the original FW will send 10 bytes and January '21 FW update will send 11
     if (size < 10 || data[0] != 0x03) {
-        /* We don't know how to handle this report */
+        // We don't know how to handle this report
         return;
     }
 
@@ -213,22 +184,22 @@ static void HIDAPI_DriverStadia_HandleStatePacket(SDL_Joystick *joystick, SDL_Dr
     }
 
     if (ctx->last_state[2] != data[2]) {
-        SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_BACK, (data[2] & 0x40) ? SDL_PRESSED : SDL_RELEASED);
-        SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_GUIDE, (data[2] & 0x10) ? SDL_PRESSED : SDL_RELEASED);
-        SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_START, (data[2] & 0x20) ? SDL_PRESSED : SDL_RELEASED);
-        SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_RIGHT_STICK, (data[2] & 0x80) ? SDL_PRESSED : SDL_RELEASED);
-        SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_STADIA_CAPTURE, (data[2] & 0x01) ? SDL_PRESSED : SDL_RELEASED);
-        SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_STADIA_GOOGLE_ASSISTANT, (data[2] & 0x02) ? SDL_PRESSED : SDL_RELEASED);
+        SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_BACK, ((data[2] & 0x40) != 0));
+        SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_GUIDE, ((data[2] & 0x10) != 0));
+        SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_START, ((data[2] & 0x20) != 0));
+        SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_RIGHT_STICK, ((data[2] & 0x80) != 0));
+        SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_STADIA_CAPTURE, ((data[2] & 0x01) != 0));
+        SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_STADIA_GOOGLE_ASSISTANT, ((data[2] & 0x02) != 0));
     }
 
     if (ctx->last_state[3] != data[3]) {
-        SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_SOUTH, (data[3] & 0x40) ? SDL_PRESSED : SDL_RELEASED);
-        SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_EAST, (data[3] & 0x20) ? SDL_PRESSED : SDL_RELEASED);
-        SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_WEST, (data[3] & 0x10) ? SDL_PRESSED : SDL_RELEASED);
-        SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_NORTH, (data[3] & 0x08) ? SDL_PRESSED : SDL_RELEASED);
-        SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, (data[3] & 0x04) ? SDL_PRESSED : SDL_RELEASED);
-        SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, (data[3] & 0x02) ? SDL_PRESSED : SDL_RELEASED);
-        SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_LEFT_STICK, (data[3] & 0x01) ? SDL_PRESSED : SDL_RELEASED);
+        SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_SOUTH, ((data[3] & 0x40) != 0));
+        SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_EAST, ((data[3] & 0x20) != 0));
+        SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_WEST, ((data[3] & 0x10) != 0));
+        SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_NORTH, ((data[3] & 0x08) != 0));
+        SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, ((data[3] & 0x04) != 0));
+        SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, ((data[3] & 0x02) != 0));
+        SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_LEFT_STICK, ((data[3] & 0x01) != 0));
     }
 
 #define READ_STICK_AXIS(offset) \
@@ -258,7 +229,7 @@ static void HIDAPI_DriverStadia_HandleStatePacket(SDL_Joystick *joystick, SDL_Dr
     SDL_memcpy(ctx->last_state, data, SDL_min(size, sizeof(ctx->last_state)));
 }
 
-static SDL_bool HIDAPI_DriverStadia_UpdateDevice(SDL_HIDAPI_Device *device)
+static bool HIDAPI_DriverStadia_UpdateDevice(SDL_HIDAPI_Device *device)
 {
     SDL_DriverStadia_Context *ctx = (SDL_DriverStadia_Context *)device->context;
     SDL_Joystick *joystick = NULL;
@@ -266,9 +237,9 @@ static SDL_bool HIDAPI_DriverStadia_UpdateDevice(SDL_HIDAPI_Device *device)
     int size = 0;
 
     if (device->num_joysticks > 0) {
-        joystick = SDL_GetJoystickFromInstanceID(device->joysticks[0]);
+        joystick = SDL_GetJoystickFromID(device->joysticks[0]);
     } else {
-        return SDL_FALSE;
+        return false;
     }
 
     while ((size = SDL_hid_read_timeout(device->dev, data, sizeof(data), 0)) > 0) {
@@ -283,42 +254,26 @@ static SDL_bool HIDAPI_DriverStadia_UpdateDevice(SDL_HIDAPI_Device *device)
     }
 
     if (size < 0) {
-        /* Read error, device is disconnected */
+        // Read error, device is disconnected
         HIDAPI_JoystickDisconnected(device, device->joysticks[0]);
     }
-    return size >= 0;
-}
-
-static void HIDAPI_DriverStadia_CloseJoystick(SDL_HIDAPI_Device *device, SDL_Joystick *joystick)
-{
-}
-
-static void HIDAPI_DriverStadia_FreeDevice(SDL_HIDAPI_Device *device)
-{
+    return (size >= 0);
 }
 
 SDL_HIDAPI_DeviceDriver SDL_HIDAPI_DriverStadia = {
-    SDL_HINT_JOYSTICK_HIDAPI_STADIA,
-    SDL_TRUE,
-    HIDAPI_DriverStadia_RegisterHints,
-    HIDAPI_DriverStadia_UnregisterHints,
-    HIDAPI_DriverStadia_IsEnabled,
-    HIDAPI_DriverStadia_IsSupportedDevice,
-    HIDAPI_DriverStadia_InitDevice,
-    HIDAPI_DriverStadia_GetDevicePlayerIndex,
-    HIDAPI_DriverStadia_SetDevicePlayerIndex,
-    HIDAPI_DriverStadia_UpdateDevice,
-    HIDAPI_DriverStadia_OpenJoystick,
-    HIDAPI_DriverStadia_RumbleJoystick,
-    HIDAPI_DriverStadia_RumbleJoystickTriggers,
-    HIDAPI_DriverStadia_GetJoystickCapabilities,
-    HIDAPI_DriverStadia_SetJoystickLED,
-    HIDAPI_DriverStadia_SendJoystickEffect,
-    HIDAPI_DriverStadia_SetJoystickSensorsEnabled,
-    HIDAPI_DriverStadia_CloseJoystick,
-    HIDAPI_DriverStadia_FreeDevice,
+    .name = SDL_HINT_JOYSTICK_HIDAPI_STADIA,
+    .enabled = true,
+    .RegisterHints = HIDAPI_DriverStadia_RegisterHints,
+    .UnregisterHints = HIDAPI_DriverStadia_UnregisterHints,
+    .IsEnabled = HIDAPI_DriverStadia_IsEnabled,
+    .IsSupportedDevice = HIDAPI_DriverStadia_IsSupportedDevice,
+    .InitDevice = HIDAPI_DriverStadia_InitDevice,
+    .UpdateDevice = HIDAPI_DriverStadia_UpdateDevice,
+    .OpenJoystick = HIDAPI_DriverStadia_OpenJoystick,
+    .RumbleJoystick = HIDAPI_DriverStadia_RumbleJoystick,
+    .GetJoystickCapabilities = HIDAPI_DriverStadia_GetJoystickCapabilities,
 };
 
-#endif /* SDL_JOYSTICK_HIDAPI_STADIA */
+#endif // SDL_JOYSTICK_HIDAPI_STADIA
 
-#endif /* SDL_JOYSTICK_HIDAPI */
+#endif // SDL_JOYSTICK_HIDAPI

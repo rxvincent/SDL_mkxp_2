@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2024 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -26,16 +26,19 @@
 #include "../SDL_joystick_c.h"
 #include "SDL_iokitjoystick_c.h"
 #include "../hidapi/SDL_hidapijoystick_c.h"
-#include "../../haptic/darwin/SDL_syshaptic_c.h" /* For haptic hot plugging */
+#include "../../haptic/darwin/SDL_syshaptic_c.h" // For haptic hot plugging
+#include "../usb_ids.h"
+#include "../../SDL_hints_c.h"
+#include <IOKit/IOKitLib.h>
 
 #define SDL_JOYSTICK_RUNLOOP_MODE CFSTR("SDLJoystick")
 
 #define CONVERT_MAGNITUDE(x) (((x)*10000) / 0x7FFF)
 
-/* The base object of the HID Manager API */
+// The base object of the HID Manager API
 static IOHIDManagerRef hidman = NULL;
 
-/* Linked list of all available devices */
+// Linked list of all available devices
 static recDevice *gpDeviceList = NULL;
 
 void FreeRumbleEffectData(FFEFFECT *effect)
@@ -54,7 +57,7 @@ FFEFFECT *CreateRumbleEffectData(Sint16 magnitude)
     FFEFFECT *effect;
     FFPERIODIC *periodic;
 
-    /* Create the effect */
+    // Create the effect
     effect = (FFEFFECT *)SDL_calloc(1, sizeof(*effect));
     if (!effect) {
         return NULL;
@@ -62,7 +65,7 @@ FFEFFECT *CreateRumbleEffectData(Sint16 magnitude)
     effect->dwSize = sizeof(*effect);
     effect->dwGain = 10000;
     effect->dwFlags = FFEFF_OBJECTOFFSETS;
-    effect->dwDuration = SDL_MAX_RUMBLE_DURATION_MS * 1000; /* In microseconds. */
+    effect->dwDuration = SDL_MAX_RUMBLE_DURATION_MS * 1000; // In microseconds.
     effect->dwTriggerButton = FFEB_NOTRIGGER;
 
     effect->cAxes = 2;
@@ -91,22 +94,6 @@ FFEFFECT *CreateRumbleEffectData(Sint16 magnitude)
     effect->lpvTypeSpecificParams = periodic;
 
     return effect;
-}
-
-static recDevice *GetDeviceForIndex(int device_index)
-{
-    recDevice *device = gpDeviceList;
-    while (device) {
-        if (!device->removed) {
-            if (device_index == 0) {
-                break;
-            }
-
-            --device_index;
-        }
-        device = device->pNext;
-    }
-    return device;
 }
 
 static void FreeElementList(recElement *pElement)
@@ -145,7 +132,7 @@ static recDevice *FreeDevice(recDevice *removeDevice)
         }
         SDL_UnlockJoysticks();
 
-        /* save next device prior to disposing of this device */
+        // save next device prior to disposing of this device
         pDeviceNext = removeDevice->pNext;
 
         if (gpDeviceList == removeDevice) {
@@ -162,7 +149,7 @@ static recDevice *FreeDevice(recDevice *removeDevice)
         }
         removeDevice->pNext = NULL;
 
-        /* free element lists */
+        // free element lists
         FreeElementList(removeDevice->firstAxis);
         FreeElementList(removeDevice->firstButton);
         FreeElementList(removeDevice->firstHat);
@@ -172,17 +159,17 @@ static recDevice *FreeDevice(recDevice *removeDevice)
     return pDeviceNext;
 }
 
-static SDL_bool GetHIDElementState(recDevice *pDevice, recElement *pElement, SInt32 *pValue)
+static bool GetHIDElementState(recDevice *pDevice, recElement *pElement, SInt32 *pValue)
 {
     SInt32 value = 0;
-    int returnValue = SDL_FALSE;
+    bool result = false;
 
     if (pDevice && pDevice->deviceRef && pElement) {
         IOHIDValueRef valueRef;
         if (IOHIDDeviceGetValue(pDevice->deviceRef, pElement->elementRef, &valueRef) == kIOReturnSuccess) {
             value = (SInt32)IOHIDValueGetIntegerValue(valueRef);
 
-            /* record min and max for auto calibration */
+            // record min and max for auto calibration
             if (value < pElement->minReport) {
                 pElement->minReport = value;
             }
@@ -191,32 +178,55 @@ static SDL_bool GetHIDElementState(recDevice *pDevice, recElement *pElement, SIn
             }
             *pValue = value;
 
-            returnValue = SDL_TRUE;
+            result = true;
         }
     }
-    return returnValue;
+    return result;
 }
 
-static SDL_bool GetHIDScaledCalibratedState(recDevice *pDevice, recElement *pElement, SInt32 min, SInt32 max, SInt32 *pValue)
+static bool GetHIDScaledCalibratedState(recDevice *pDevice, recElement *pElement, SInt32 min, SInt32 max, SInt32 *pValue)
 {
     const float deviceScale = max - min;
     const float readScale = pElement->maxReport - pElement->minReport;
-    int returnValue = SDL_FALSE;
+    bool result = false;
     if (GetHIDElementState(pDevice, pElement, pValue)) {
         if (readScale == 0) {
-            returnValue = SDL_TRUE; /* no scaling at all */
+            result = true; // no scaling at all
         } else {
-            *pValue = ((*pValue - pElement->minReport) * deviceScale / readScale) + min;
-            returnValue = SDL_TRUE;
+            *pValue = (Sint32)(((*pValue - pElement->minReport) * deviceScale / readScale) + min);
+            result = true;
         }
     }
-    return returnValue;
+    return result;
+}
+
+static bool GetHIDScaledCalibratedState_NACON_Revolution_X_Unlimited(recDevice *pDevice, recElement *pElement, SInt32 min, SInt32 max, SInt32 *pValue)
+{
+    if (pElement->minReport == 0 && pElement->maxReport == 255) {
+        return GetHIDScaledCalibratedState(pDevice, pElement, min, max, pValue);
+    }
+
+    // This device thumbstick axes have an unusual axis range that
+    // doesn't work with GetHIDScaledCalibratedState() above.
+    //
+    // See https://github.com/libsdl-org/SDL/issues/13143 for details
+    if (GetHIDElementState(pDevice, pElement, pValue)) {
+        if (*pValue >= 0) {
+            // Negative axis values range from 32767 (at rest) to 0 (minimum)
+            *pValue = -32767 + *pValue;
+        } else if (*pValue < 0) {
+            // Positive axis values range from -32768 (at rest) to 0 (maximum)
+            *pValue = 32768 + *pValue;
+        }
+        return true;
+    }
+    return false;
 }
 
 static void JoystickDeviceWasRemovedCallback(void *ctx, IOReturn result, void *sender)
 {
     recDevice *device = (recDevice *)ctx;
-    device->removed = SDL_TRUE;
+    device->removed = true;
     if (device->deviceRef) {
         // deviceRef was invalidated due to the remove
         CFRelease(device->deviceRef);
@@ -233,36 +243,34 @@ static void JoystickDeviceWasRemovedCallback(void *ctx, IOReturn result, void *s
     if (device->ffdevice) {
         FFReleaseDevice(device->ffdevice);
         device->ffdevice = NULL;
-        device->ff_initialized = SDL_FALSE;
+        device->ff_initialized = false;
     }
 #ifdef SDL_HAPTIC_IOKIT
     MacHaptic_MaybeRemoveDevice(device->ffservice);
 #endif
-
-    SDL_PrivateJoystickRemoved(device->instance_id);
 }
 
 static void AddHIDElement(const void *value, void *parameter);
 
-/* Call AddHIDElement() on all elements in an array of IOHIDElementRefs */
+// Call AddHIDElement() on all elements in an array of IOHIDElementRefs
 static void AddHIDElements(CFArrayRef array, recDevice *pDevice)
 {
     const CFRange range = { 0, CFArrayGetCount(array) };
     CFArrayApplyFunction(array, range, AddHIDElement, pDevice);
 }
 
-static SDL_bool ElementAlreadyAdded(const IOHIDElementCookie cookie, const recElement *listitem)
+static bool ElementAlreadyAdded(const IOHIDElementCookie cookie, const recElement *listitem)
 {
     while (listitem) {
         if (listitem->cookie == cookie) {
-            return SDL_TRUE;
+            return true;
         }
         listitem = listitem->pNext;
     }
-    return SDL_FALSE;
+    return false;
 }
 
-/* See if we care about this HID element, and if so, note it in our recDevice. */
+// See if we care about this HID element, and if so, note it in our recDevice.
 static void AddHIDElement(const void *value, void *parameter)
 {
     recDevice *pDevice = (recDevice *)parameter;
@@ -276,13 +284,13 @@ static void AddHIDElement(const void *value, void *parameter)
         recElement *element = NULL;
         recElement **headElement = NULL;
 
-        /* look at types of interest */
+        // look at types of interest
         switch (IOHIDElementGetType(refElement)) {
         case kIOHIDElementTypeInput_Misc:
         case kIOHIDElementTypeInput_Button:
         case kIOHIDElementTypeInput_Axis:
         {
-            switch (usagePage) { /* only interested in kHIDPage_GenericDesktop and kHIDPage_Button */
+            switch (usagePage) { // only interested in kHIDPage_GenericDesktop and kHIDPage_Button
             case kHIDPage_GenericDesktop:
                 switch (usage) {
                 case kHIDUsage_GD_X:
@@ -351,7 +359,7 @@ static void AddHIDElement(const void *value, void *parameter)
                 break;
 
             case kHIDPage_Button:
-            case kHIDPage_Consumer: /* e.g. 'pause' button on Steelseries MFi gamepads. */
+            case kHIDPage_Consumer: // e.g. 'pause' button on Steelseries MFi gamepads.
                 if (!ElementAlreadyAdded(cookie, pDevice->firstButton)) {
                     element = (recElement *)SDL_calloc(1, sizeof(recElement));
                     if (element) {
@@ -378,7 +386,7 @@ static void AddHIDElement(const void *value, void *parameter)
             break;
         }
 
-        if (element && headElement) { /* add to list */
+        if (element && headElement) { // add to list
             recElement *elementPrevious = NULL;
             recElement *elementCurrent = *headElement;
             while (elementCurrent && usage >= elementCurrent->usage) {
@@ -410,7 +418,7 @@ static int GetSteamVirtualGamepadSlot(Uint16 vendor_id, Uint16 product_id, const
     int slot = -1;
 
     if (vendor_id == USB_VENDOR_MICROSOFT && product_id == USB_PRODUCT_XBOX360_WIRED_CONTROLLER) {
-        /* Gamepad name is "GamePad-N", where N is slot + 1 */
+        // Gamepad name is "GamePad-N", where N is slot + 1
         if (SDL_sscanf(product_string, "GamePad-%d", &slot) == 1) {
             slot -= 1;
         }
@@ -418,7 +426,17 @@ static int GetSteamVirtualGamepadSlot(Uint16 vendor_id, Uint16 product_id, const
     return slot;
 }
 
-static SDL_bool GetDeviceInfo(IOHIDDeviceRef hidDevice, recDevice *pDevice)
+static bool IsControlledBy360ControllerDriver(IOHIDDeviceRef hidDevice)
+{
+    bool controlled_by_360controller = false;
+    io_service_t service = IOHIDDeviceGetService(hidDevice);
+    if (service != MACH_PORT_NULL) {
+        controlled_by_360controller = IOObjectConformsTo(service, "Xbox360ControllerClass");
+    }
+    return controlled_by_360controller;
+}
+
+static bool GetDeviceInfo(IOHIDDeviceRef hidDevice, recDevice *pDevice)
 {
     Sint32 vendor = 0;
     Sint32 product = 0;
@@ -429,13 +447,13 @@ static SDL_bool GetDeviceInfo(IOHIDDeviceRef hidDevice, recDevice *pDevice)
     CFTypeRef refCF = NULL;
     CFArrayRef array = NULL;
 
-    /* get usage page and usage */
+    // get usage page and usage
     refCF = IOHIDDeviceGetProperty(hidDevice, CFSTR(kIOHIDPrimaryUsagePageKey));
     if (refCF) {
         CFNumberGetValue(refCF, kCFNumberSInt32Type, &pDevice->usagePage);
     }
     if (pDevice->usagePage != kHIDPage_GenericDesktop) {
-        return SDL_FALSE; /* Filter device list to non-keyboard/mouse stuff */
+        return false; // Filter device list to non-keyboard/mouse stuff
     }
 
     refCF = IOHIDDeviceGetProperty(hidDevice, CFSTR(kIOHIDPrimaryUsageKey));
@@ -446,7 +464,7 @@ static SDL_bool GetDeviceInfo(IOHIDDeviceRef hidDevice, recDevice *pDevice)
     if ((pDevice->usage != kHIDUsage_GD_Joystick &&
          pDevice->usage != kHIDUsage_GD_GamePad &&
          pDevice->usage != kHIDUsage_GD_MultiAxisController)) {
-        return SDL_FALSE; /* Filter device list to non-keyboard/mouse stuff */
+        return false; // Filter device list to non-keyboard/mouse stuff
     }
 
     /* Make sure we retain the use of the IOKit-provided device-object,
@@ -475,7 +493,19 @@ static SDL_bool GetDeviceInfo(IOHIDDeviceRef hidDevice, recDevice *pDevice)
         CFNumberGetValue(refCF, kCFNumberSInt32Type, &version);
     }
 
-    /* get device name */
+    if (!IsControlledBy360ControllerDriver(hidDevice) && SDL_IsJoystickXboxOne(vendor, product)) {
+        // We can't actually use this API for Xbox controllers without the 360Controller driver
+        return false;
+    }
+
+    if (SDL_IsJoystickSteamVirtualGamepad(vendor, product, version)) {
+        if (IOHIDDeviceGetProperty(hidDevice, CFSTR(kIOHIDVirtualHIDevice)) != kCFBooleanTrue) {
+            // This is a real Xbox 360 controller, adjust the version so it's not detected as a Steam virtual gamepad
+            version = 1;
+        }
+    }
+
+    // get device name
     refCF = IOHIDDeviceGetProperty(hidDevice, CFSTR(kIOHIDManufacturerKey));
     if ((!refCF) || (!CFStringGetCString(refCF, manufacturer_string, sizeof(manufacturer_string), kCFStringEncodingUTF8))) {
         manufacturer_string[0] = '\0';
@@ -490,12 +520,19 @@ static SDL_bool GetDeviceInfo(IOHIDDeviceRef hidDevice, recDevice *pDevice)
         SDL_free(name);
     }
 
-    if (SDL_JoystickHandledByAnotherDriver(&SDL_DARWIN_JoystickDriver, vendor, product, version, pDevice->product)) {
-        return SDL_FALSE;
+    if (SDL_ShouldIgnoreJoystick(vendor, product, version, pDevice->product)) {
+        return false;
     }
 
+    pDevice->vendor_id = (Uint16)vendor;
+    pDevice->product_id = (Uint16)product;
     pDevice->guid = SDL_CreateJoystickGUID(SDL_HARDWARE_BUS_USB, (Uint16)vendor, (Uint16)product, (Uint16)version, manufacturer_string, product_string, 0, 0);
     pDevice->steam_virtual_gamepad_slot = GetSteamVirtualGamepadSlot((Uint16)vendor, (Uint16)product, product_string);
+
+    if (vendor == USB_VENDOR_NACON_ALT &&
+        product == USB_PRODUCT_NACON_REVOLUTION_X_UNLIMITED_BT) {
+        pDevice->nacon_revolution_x_unlimited = true;
+    }
 
     array = IOHIDDeviceCopyMatchingElements(hidDevice, NULL, kIOHIDOptionsTypeNone);
     if (array) {
@@ -503,26 +540,26 @@ static SDL_bool GetDeviceInfo(IOHIDDeviceRef hidDevice, recDevice *pDevice)
         CFRelease(array);
     }
 
-    return SDL_TRUE;
+    return true;
 }
 
-static SDL_bool JoystickAlreadyKnown(IOHIDDeviceRef ioHIDDeviceObject)
+static bool JoystickAlreadyKnown(IOHIDDeviceRef ioHIDDeviceObject)
 {
     recDevice *i;
 
 #ifdef SDL_JOYSTICK_MFI
-    extern SDL_bool IOS_SupportedHIDDevice(IOHIDDeviceRef device);
-    if (IOS_SupportedHIDDevice(ioHIDDeviceObject)) {
-        return SDL_TRUE;
+    extern bool IOS_SupportedHIDDevice(IOHIDDeviceRef device);
+    if (!IsControlledBy360ControllerDriver(ioHIDDeviceObject) && IOS_SupportedHIDDevice(ioHIDDeviceObject)) {
+        return true;
     }
 #endif
 
     for (i = gpDeviceList; i; i = i->pNext) {
         if (i->deviceRef == ioHIDDeviceObject) {
-            return SDL_TRUE;
+            return true;
         }
     }
-    return SDL_FALSE;
+    return false;
 }
 
 static void JoystickDeviceWasAddedCallback(void *ctx, IOReturn res, void *sender, IOHIDDeviceRef ioHIDDeviceObject)
@@ -535,7 +572,7 @@ static void JoystickDeviceWasAddedCallback(void *ctx, IOReturn res, void *sender
     }
 
     if (JoystickAlreadyKnown(ioHIDDeviceObject)) {
-        return; /* IOKit sent us a duplicate. */
+        return; // IOKit sent us a duplicate.
     }
 
     device = (recDevice *)SDL_calloc(1, sizeof(recDevice));
@@ -545,32 +582,21 @@ static void JoystickDeviceWasAddedCallback(void *ctx, IOReturn res, void *sender
 
     if (!GetDeviceInfo(ioHIDDeviceObject, device)) {
         FreeDevice(device);
-        return; /* not a device we care about, probably. */
+        return; // not a device we care about, probably.
     }
 
-    if (SDL_ShouldIgnoreJoystick(device->product, device->guid)) {
-        FreeDevice(device);
-        return;
-    }
-
-    /* Get notified when this device is disconnected. */
+    // Get notified when this device is disconnected.
     IOHIDDeviceRegisterRemovalCallback(ioHIDDeviceObject, JoystickDeviceWasRemovedCallback, device);
     IOHIDDeviceScheduleWithRunLoop(ioHIDDeviceObject, CFRunLoopGetCurrent(), SDL_JOYSTICK_RUNLOOP_MODE);
-    device->runLoopAttached = SDL_TRUE;
+    device->runLoopAttached = true;
 
-    /* Allocate an instance ID for this device */
-    device->instance_id = SDL_GetNextObjectID();
-
-    /* We have to do some storage of the io_service_t for SDL_OpenHapticFromJoystick */
+    // We have to do some storage of the io_service_t for SDL_OpenHapticFromJoystick
     ioservice = IOHIDDeviceGetService(ioHIDDeviceObject);
     if ((ioservice) && (FFIsForceFeedback(ioservice) == FF_OK)) {
         device->ffservice = ioservice;
-#ifdef SDL_HAPTIC_IOKIT
-        MacHaptic_MaybeAddDevice(ioservice);
-#endif
     }
 
-    /* Add device to the end of the list */
+    // Add device to the end of the list
     if (!gpDeviceList) {
         gpDeviceList = device;
     } else {
@@ -582,16 +608,14 @@ static void JoystickDeviceWasAddedCallback(void *ctx, IOReturn res, void *sender
         }
         curdevice->pNext = device;
     }
-
-    SDL_PrivateJoystickAdded(device->instance_id);
 }
 
-static SDL_bool ConfigHIDManager(CFArrayRef matchingArray)
+static bool ConfigHIDManager(CFArrayRef matchingArray)
 {
     CFRunLoopRef runloop = CFRunLoopGetCurrent();
 
     if (IOHIDManagerOpen(hidman, kIOHIDOptionsTypeNone) != kIOReturnSuccess) {
-        return SDL_FALSE;
+        return false;
     }
 
     IOHIDManagerSetDeviceMatchingMultiple(hidman, matchingArray);
@@ -599,24 +623,24 @@ static SDL_bool ConfigHIDManager(CFArrayRef matchingArray)
     IOHIDManagerScheduleWithRunLoop(hidman, runloop, SDL_JOYSTICK_RUNLOOP_MODE);
 
     while (CFRunLoopRunInMode(SDL_JOYSTICK_RUNLOOP_MODE, 0, TRUE) == kCFRunLoopRunHandledSource) {
-        /* no-op. Callback fires once per existing device. */
+        // no-op. Callback fires once per existing device.
     }
 
-    /* future hotplug events will come through SDL_JOYSTICK_RUNLOOP_MODE now. */
+    // future hotplug events will come through SDL_JOYSTICK_RUNLOOP_MODE now.
 
-    return SDL_TRUE; /* good to go. */
+    return true; // good to go.
 }
 
 static CFDictionaryRef CreateHIDDeviceMatchDictionary(const UInt32 page, const UInt32 usage, int *okay)
 {
-    CFDictionaryRef retval = NULL;
+    CFDictionaryRef result = NULL;
     CFNumberRef pageNumRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &page);
     CFNumberRef usageNumRef = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &usage);
     const void *keys[2] = { (void *)CFSTR(kIOHIDDeviceUsagePageKey), (void *)CFSTR(kIOHIDDeviceUsageKey) };
     const void *vals[2] = { (void *)pageNumRef, (void *)usageNumRef };
 
     if (pageNumRef && usageNumRef) {
-        retval = CFDictionaryCreate(kCFAllocatorDefault, keys, vals, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        result = CFDictionaryCreate(kCFAllocatorDefault, keys, vals, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     }
 
     if (pageNumRef) {
@@ -626,16 +650,16 @@ static CFDictionaryRef CreateHIDDeviceMatchDictionary(const UInt32 page, const U
         CFRelease(usageNumRef);
     }
 
-    if (!retval) {
+    if (!result) {
         *okay = 0;
     }
 
-    return retval;
+    return result;
 }
 
-static SDL_bool CreateHIDManager(void)
+static bool CreateHIDManager(void)
 {
-    SDL_bool retval = SDL_FALSE;
+    bool result = false;
     int okay = 1;
     const void *vals[] = {
         (void *)CreateHIDDeviceMatchDictionary(kHIDPage_GenericDesktop, kHIDUsage_GD_Joystick, &okay),
@@ -655,129 +679,127 @@ static SDL_bool CreateHIDManager(void)
     if (array) {
         hidman = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
         if (hidman != NULL) {
-            retval = ConfigHIDManager(array);
+            result = ConfigHIDManager(array);
         }
         CFRelease(array);
     }
 
-    return retval;
+    return result;
 }
 
-static int DARWIN_JoystickInit(void)
+static bool DARWIN_JoystickInit(void)
 {
-    if (!SDL_GetHintBoolean(SDL_HINT_JOYSTICK_IOKIT, SDL_TRUE)) {
-        return 0;
+    if (!SDL_GetHintBoolean(SDL_HINT_JOYSTICK_IOKIT, true)) {
+        return true;
     }
 
     if (!CreateHIDManager()) {
         return SDL_SetError("Joystick: Couldn't initialize HID Manager");
     }
 
-    return 0;
+    return true;
 }
 
-static int DARWIN_JoystickGetCount(void)
+static SDL_JoystickDevice *DARWIN_CreateJoystickDevice(recDevice *data)
 {
-    recDevice *device = gpDeviceList;
-    int nJoySticks = 0;
-
-    while (device) {
-        if (!device->removed) {
-            nJoySticks++;
-        }
-        device = device->pNext;
+    SDL_JoystickDevice *device = SDL_CreateJoystickDevice(&SDL_DARWIN_JoystickDriver, 0);
+    if (!device) {
+        return NULL;
     }
 
-    return nJoySticks;
+    // The IOKit device is the unique ID for the device
+    device->internal = (SDL_JoystickDeviceData *)data;
+    device->unique_id = &device->internal;
+    device->unique_id_len = sizeof(device->internal);
+
+    device->name = SDL_strdup(data->product);
+    if (!device->name) {
+        SDL_DestroyJoystickDevice(device);
+        return NULL;
+    }
+    device->guid = data->guid;
+    device->steam_virtual_gamepad_slot = data->steam_virtual_gamepad_slot;
+
+    SDL_AddJoystickDeviceMatchVIDPID(device, data->vendor_id, data->product_id);
+
+    return device;
 }
 
-static void DARWIN_JoystickDetect(void)
+// Free devices that were removed during the last update, their SDL_JoystickDevices
+// have been removed and their recDevice is no longer referenced
+static void FreeRemovedDevices(void)
 {
-    recDevice *device = gpDeviceList;
-    while (device) {
-        if (device->removed) {
-            device = FreeDevice(device);
+    recDevice *entry = gpDeviceList;
+    while (entry) {
+        if (entry->removed) {
+            entry = FreeDevice(entry);
         } else {
-            device = device->pNext;
+            entry = entry->pNext;
         }
     }
+}
+
+static SDL_JoystickDevice *DARWIN_JoystickQueryDevices(void)
+{
+    SDL_JoystickDevice *devices = NULL;
+    SDL_JoystickDevice *tail = NULL;
+    recDevice *entry;
+
+    FreeRemovedDevices();
 
     if (hidman) {
-        /* run this after the checks above so we don't set device->removed and delete the device before
-           DARWIN_JoystickUpdate can run to clean up the SDL_Joystick object that owns this device */
         while (CFRunLoopRunInMode(SDL_JOYSTICK_RUNLOOP_MODE, 0, TRUE) == kCFRunLoopRunHandledSource) {
-            /* no-op. Pending callbacks will fire in CFRunLoopRunInMode(). */
+            // no-op. Pending callbacks will fire in CFRunLoopRunInMode().
         }
     }
-}
 
-static SDL_bool DARWIN_JoystickIsDevicePresent(Uint16 vendor_id, Uint16 product_id, Uint16 version, const char *name)
-{
-    /* We don't override any other drivers */
-    return SDL_FALSE;
-}
-
-static const char *DARWIN_JoystickGetDeviceName(int device_index)
-{
-    recDevice *device = GetDeviceForIndex(device_index);
-    return device ? device->product : "UNKNOWN";
-}
-
-static const char *DARWIN_JoystickGetDevicePath(int device_index)
-{
-    return NULL;
-}
-
-static int DARWIN_JoystickGetDeviceSteamVirtualGamepadSlot(int device_index)
-{
-    recDevice *device = GetDeviceForIndex(device_index);
-    return device ? device->steam_virtual_gamepad_slot : -1;
-}
-
-static int DARWIN_JoystickGetDevicePlayerIndex(int device_index)
-{
-    return -1;
-}
-
-static void DARWIN_JoystickSetDevicePlayerIndex(int device_index, int player_index)
-{
-}
-
-static SDL_JoystickGUID DARWIN_JoystickGetDeviceGUID(int device_index)
-{
-    recDevice *device = GetDeviceForIndex(device_index);
-    SDL_JoystickGUID guid;
-    if (device) {
-        guid = device->guid;
-    } else {
-        SDL_zero(guid);
+    for (entry = gpDeviceList; entry; entry = entry->pNext) {
+        if (!entry->removed) {
+            SDL_JoystickDevice *device = DARWIN_CreateJoystickDevice(entry);
+            if (device) {
+                if (tail) {
+                    tail->next = device;
+                } else {
+                    devices = device;
+                }
+                tail = device;
+            }
+        }
     }
-    return guid;
+    return devices;
 }
 
-static SDL_JoystickID DARWIN_JoystickGetDeviceInstanceID(int device_index)
+static bool DARWIN_JoystickPrepareDevice(SDL_JoystickDevice *device)
 {
-    recDevice *device = GetDeviceForIndex(device_index);
-    return device ? device->instance_id : 0;
+#ifdef SDL_HAPTIC_IOKIT
+    recDevice *data = (recDevice *)device->internal;
+    if (data->ffservice) {
+        MacHaptic_MaybeAddDevice(data->ffservice);
+    }
+#endif
+    return true;
 }
 
-static int DARWIN_JoystickOpen(SDL_Joystick *joystick, int device_index)
+static bool DARWIN_JoystickOpen(SDL_Joystick *joystick, SDL_JoystickDevice *device)
 {
-    recDevice *device = GetDeviceForIndex(device_index);
+    recDevice *data = (recDevice *)device->internal;
 
-    joystick->hwdata = device;
-    device->joystick = joystick;
-    joystick->name = device->product;
-
-    joystick->naxes = device->axes;
-    joystick->nhats = device->hats;
-    joystick->nbuttons = device->buttons;
-
-    if (device->ffservice) {
-        SDL_SetBooleanProperty(SDL_GetJoystickProperties(joystick), SDL_PROP_JOYSTICK_CAP_RUMBLE_BOOLEAN, SDL_TRUE);
+    if (data->removed) {
+        return SDL_SetError("Joystick has been disconnected");
     }
 
-    return 0;
+    joystick->hwdata = data;
+    data->joystick = joystick;
+
+    joystick->naxes = data->axes;
+    joystick->nhats = data->hats;
+    joystick->nbuttons = data->buttons;
+
+    if (data->ffservice) {
+        SDL_SetBooleanProperty(SDL_GetJoystickProperties(joystick), SDL_PROP_JOYSTICK_CAP_RUMBLE_BOOLEAN, true);
+    }
+
+    return true;
 }
 
 /*
@@ -788,7 +810,7 @@ static const char *FFStrError(unsigned int err)
     switch (err) {
     case FFERR_DEVICEFULL:
         return "device full";
-    /* This should be valid, but for some reason isn't defined... */
+    // This should be valid, but for some reason isn't defined...
     /* case FFERR_DEVICENOTREG:
         return "device not registered"; */
     case FFERR_DEVICEPAUSED:
@@ -835,7 +857,7 @@ static const char *FFStrError(unsigned int err)
     }
 }
 
-static int DARWIN_JoystickInitRumble(recDevice *device, Sint16 magnitude)
+static bool DARWIN_JoystickInitRumble(recDevice *device, Sint16 magnitude)
 {
     HRESULT result;
 
@@ -846,7 +868,7 @@ static int DARWIN_JoystickInitRumble(recDevice *device, Sint16 magnitude)
         }
     }
 
-    /* Reset and then enable actuators */
+    // Reset and then enable actuators
     result = FFDeviceSendForceFeedbackCommand(device->ffdevice, FFSFFC_RESET);
     if (result != FF_OK) {
         return SDL_SetError("Unable to reset force feedback device: %s", FFStrError(result));
@@ -857,10 +879,10 @@ static int DARWIN_JoystickInitRumble(recDevice *device, Sint16 magnitude)
         return SDL_SetError("Unable to enable force feedback actuators: %s", FFStrError(result));
     }
 
-    /* Create the effect */
+    // Create the effect
     device->ffeffect = CreateRumbleEffectData(magnitude);
     if (!device->ffeffect) {
-        return -1;
+        return false;
     }
 
     result = FFDeviceCreateEffect(device->ffdevice, kFFEffectType_Sine_ID,
@@ -868,15 +890,15 @@ static int DARWIN_JoystickInitRumble(recDevice *device, Sint16 magnitude)
     if (result != FF_OK) {
         return SDL_SetError("Haptic: Unable to create effect: %s", FFStrError(result));
     }
-    return 0;
+    return true;
 }
 
-static int DARWIN_JoystickRumble(SDL_Joystick *joystick, Uint16 low_frequency_rumble, Uint16 high_frequency_rumble)
+static bool DARWIN_JoystickRumble(SDL_Joystick *joystick, Uint16 low_frequency_rumble, Uint16 high_frequency_rumble)
 {
     HRESULT result;
     recDevice *device = joystick->hwdata;
 
-    /* Scale and average the two rumble strengths */
+    // Scale and average the two rumble strengths
     Sint16 magnitude = (Sint16)(((low_frequency_rumble / 2) + (high_frequency_rumble / 2)) / 2);
 
     if (!device) {
@@ -897,37 +919,17 @@ static int DARWIN_JoystickRumble(SDL_Joystick *joystick, Uint16 low_frequency_ru
             return SDL_SetError("Unable to update rumble effect: %s", FFStrError(result));
         }
     } else {
-        if (DARWIN_JoystickInitRumble(device, magnitude) < 0) {
-            return -1;
+        if (!DARWIN_JoystickInitRumble(device, magnitude)) {
+            return false;
         }
-        device->ff_initialized = SDL_TRUE;
+        device->ff_initialized = true;
     }
 
     result = FFEffectStart(device->ffeffect_ref, 1, 0);
     if (result != FF_OK) {
         return SDL_SetError("Unable to run the rumble effect: %s", FFStrError(result));
     }
-    return 0;
-}
-
-static int DARWIN_JoystickRumbleTriggers(SDL_Joystick *joystick, Uint16 left_rumble, Uint16 right_rumble)
-{
-    return SDL_Unsupported();
-}
-
-static int DARWIN_JoystickSetLED(SDL_Joystick *joystick, Uint8 red, Uint8 green, Uint8 blue)
-{
-    return SDL_Unsupported();
-}
-
-static int DARWIN_JoystickSendEffect(SDL_Joystick *joystick, const void *data, int size)
-{
-    return SDL_Unsupported();
-}
-
-static int DARWIN_JoystickSetSensorsEnabled(SDL_Joystick *joystick, SDL_bool enabled)
-{
-    return SDL_Unsupported();
+    return true;
 }
 
 static void DARWIN_JoystickUpdate(SDL_Joystick *joystick)
@@ -935,14 +937,14 @@ static void DARWIN_JoystickUpdate(SDL_Joystick *joystick)
     recDevice *device = joystick->hwdata;
     recElement *element;
     SInt32 value, range;
-    int i, goodRead = SDL_FALSE;
+    int i, goodRead = false;
     Uint64 timestamp = SDL_GetTicksNS();
 
     if (!device) {
         return;
     }
 
-    if (device->removed) { /* device was unplugged; ignore it. */
+    if (device->removed) { // device was unplugged; ignore it.
         if (joystick->hwdata) {
             joystick->hwdata = NULL;
         }
@@ -953,7 +955,11 @@ static void DARWIN_JoystickUpdate(SDL_Joystick *joystick)
     i = 0;
 
     while (element) {
-        goodRead = GetHIDScaledCalibratedState(device, element, -32768, 32767, &value);
+        if (device->nacon_revolution_x_unlimited) {
+            goodRead = GetHIDScaledCalibratedState_NACON_Revolution_X_Unlimited(device, element, -32768, 32767, &value);
+        } else {
+            goodRead = GetHIDScaledCalibratedState(device, element, -32768, 32767, &value);
+        }
         if (goodRead) {
             SDL_SendJoystickAxis(timestamp, joystick, i, value);
         }
@@ -967,10 +973,7 @@ static void DARWIN_JoystickUpdate(SDL_Joystick *joystick)
     while (element) {
         goodRead = GetHIDElementState(device, element, &value);
         if (goodRead) {
-            if (value > 1) { /* handle pressure-sensitive buttons */
-                value = 1;
-            }
-            SDL_SendJoystickButton(timestamp, joystick, i, value);
+            SDL_SendJoystickButton(timestamp, joystick, i, (value != 0));
         }
 
         element = element->pNext;
@@ -987,9 +990,9 @@ static void DARWIN_JoystickUpdate(SDL_Joystick *joystick)
         goodRead = GetHIDElementState(device, element, &value);
         if (goodRead) {
             value -= element->min;
-            if (range == 4) { /* 4 position hatswitch - scale up value */
+            if (range == 4) { // 4 position hatswitch - scale up value
                 value *= 2;
-            } else if (range != 8) { /* Neither a 4 nor 8 positions - fall back to default position (centered) */
+            } else if (range != 8) { // Neither a 4 nor 8 positions - fall back to default position (centered)
                 value = -1;
             }
             switch (value) {
@@ -1045,7 +1048,7 @@ static void DARWIN_JoystickClose(SDL_Joystick *joystick)
 static void DARWIN_JoystickQuit(void)
 {
     while (FreeDevice(gpDeviceList)) {
-        /* spin */
+        // spin
     }
 
     if (hidman) {
@@ -1056,33 +1059,15 @@ static void DARWIN_JoystickQuit(void)
     }
 }
 
-static SDL_bool DARWIN_JoystickGetGamepadMapping(int device_index, SDL_GamepadMapping *out)
-{
-    return SDL_FALSE;
-}
-
 SDL_JoystickDriver SDL_DARWIN_JoystickDriver = {
-    DARWIN_JoystickInit,
-    DARWIN_JoystickGetCount,
-    DARWIN_JoystickDetect,
-    DARWIN_JoystickIsDevicePresent,
-    DARWIN_JoystickGetDeviceName,
-    DARWIN_JoystickGetDevicePath,
-    DARWIN_JoystickGetDeviceSteamVirtualGamepadSlot,
-    DARWIN_JoystickGetDevicePlayerIndex,
-    DARWIN_JoystickSetDevicePlayerIndex,
-    DARWIN_JoystickGetDeviceGUID,
-    DARWIN_JoystickGetDeviceInstanceID,
-    DARWIN_JoystickOpen,
-    DARWIN_JoystickRumble,
-    DARWIN_JoystickRumbleTriggers,
-    DARWIN_JoystickSetLED,
-    DARWIN_JoystickSendEffect,
-    DARWIN_JoystickSetSensorsEnabled,
-    DARWIN_JoystickUpdate,
-    DARWIN_JoystickClose,
-    DARWIN_JoystickQuit,
-    DARWIN_JoystickGetGamepadMapping
+    .Init = DARWIN_JoystickInit,
+    .QueryDevices = DARWIN_JoystickQueryDevices,
+    .PrepareDevice = DARWIN_JoystickPrepareDevice,
+    .Open = DARWIN_JoystickOpen,
+    .Rumble = DARWIN_JoystickRumble,
+    .Update = DARWIN_JoystickUpdate,
+    .Close = DARWIN_JoystickClose,
+    .Quit = DARWIN_JoystickQuit
 };
 
-#endif /* SDL_JOYSTICK_IOKIT */
+#endif // SDL_JOYSTICK_IOKIT

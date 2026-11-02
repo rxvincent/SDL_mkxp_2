@@ -1,8 +1,8 @@
 package org.libsdl.app;
 
-
 import android.content.Context;
 import android.content.pm.ActivityInfo;
+import android.graphics.Insets;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -14,12 +14,15 @@ import android.view.Display;
 import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
+import android.view.PointerIcon;
+import android.view.ScaleGestureDetector;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
+import android.view.WindowInsets;
 import android.view.WindowManager;
-
+import java.util.function.Consumer;
 
 /**
     SDLSurface. This is what we draw on, so we need to know when it's created
@@ -28,7 +31,8 @@ import android.view.WindowManager;
     Because of this, that's where we set up the SDL thread
 */
 public class SDLSurface extends SurfaceView implements SurfaceHolder.Callback,
-    View.OnKeyListener, View.OnTouchListener, SensorEventListener  {
+    View.OnApplyWindowInsetsListener, View.OnKeyListener, View.OnTouchListener,
+    SensorEventListener, ScaleGestureDetector.OnScaleGestureListener {
 
     // Sensors
     protected SensorManager mSensorManager;
@@ -38,16 +42,55 @@ public class SDLSurface extends SurfaceView implements SurfaceHolder.Callback,
     protected float mWidth, mHeight;
 
     // Is SurfaceView ready for rendering
-    public boolean mIsSurfaceReady;
+    protected boolean mIsSurfaceReady;
+
+    // Is on-screen keyboard visible
+    protected boolean mKeyboardVisible;
+
+    // Pinch events
+    private final ScaleGestureDetector scaleGestureDetector;
+
+    // HDR headroom changes
+    protected Consumer<Display> mHdrSdrRatioListener;
+    protected float mDesiredHDRHeadroom = -1.0f;
+    protected boolean mHDRActive;
+    protected boolean mHDRMeasured;    // true if we've measured a stable HDR headroom value
+    protected boolean mHDRStable;      // true if the HDR headroom value has settled
+    protected float mReportedHDRHeadroom = -1.0f;
+    protected final Runnable mHDRStableRunnable = new Runnable() {
+        @Override
+        public void run() {
+            try {
+                if (mDisplay.getHdrSdrRatio() <= 1.01f) {
+                    // We're not in HDR mode yet
+                    return;
+                }
+            } catch (Exception ignored) {
+                return;
+            }
+            mHDRStable = true;
+            mHDRMeasured = true;
+            updateHDRHeadroom();
+        }
+    };
+
+    // How long the HDR/SDR ratio has to stay the same before we consider the display done ramping up
+    protected static final long HDR_STABLE_DELAY_MS = 250;
+
+    // While the HDR/SDR ratio is ramping, only report changes in headroom bigger than this fraction
+    protected static final float HDR_RAMP_REPORT_THRESHOLD = 0.1f;
 
     // Startup
-    public SDLSurface(Context context) {
+    protected SDLSurface(Context context) {
         super(context);
         getHolder().addCallback(this);
+
+        scaleGestureDetector = new ScaleGestureDetector(context, this);
 
         setFocusable(true);
         setFocusableInTouchMode(true);
         requestFocus();
+        setOnApplyWindowInsetsListener(this);
         setOnKeyListener(this);
         setOnTouchListener(this);
 
@@ -61,22 +104,27 @@ public class SDLSurface extends SurfaceView implements SurfaceHolder.Callback,
         mHeight = 1.0f;
 
         mIsSurfaceReady = false;
+        if (Build.VERSION.SDK_INT >= 26) {
+            // We can use CapturedPointerListener and avoid many shenanigans and problems
+            setOnCapturedPointerListener(SDLActivity.getMotionListener());
+        }
     }
 
-    public void handlePause() {
+    protected void handlePause() {
         enableSensor(Sensor.TYPE_ACCELEROMETER, false);
     }
 
-    public void handleResume() {
+    protected void handleResume() {
         setFocusable(true);
         setFocusableInTouchMode(true);
         requestFocus();
+        setOnApplyWindowInsetsListener(this);
         setOnKeyListener(this);
         setOnTouchListener(this);
         enableSensor(Sensor.TYPE_ACCELEROMETER, true);
     }
 
-    public Surface getNativeSurface() {
+    protected Surface getNativeSurface() {
         return getHolder().getSurface();
     }
 
@@ -84,6 +132,7 @@ public class SDLSurface extends SurfaceView implements SurfaceHolder.Callback,
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
         Log.v("SDL", "surfaceCreated()");
+        enableHDRListener(true);
         SDLActivity.onNativeSurfaceCreated();
     }
 
@@ -98,6 +147,7 @@ public class SDLSurface extends SurfaceView implements SurfaceHolder.Callback,
 
         mIsSurfaceReady = false;
         SDLActivity.onNativeSurfaceDestroyed();
+        enableHDRListener(false);
     }
 
     // Called when the surface is resized
@@ -117,14 +167,12 @@ public class SDLSurface extends SurfaceView implements SurfaceHolder.Callback,
         float density = 1.0f;
         try
         {
-            if (Build.VERSION.SDK_INT >= 17 /* Android 4.2 (JELLY_BEAN_MR1) */) {
-                DisplayMetrics realMetrics = new DisplayMetrics();
-                mDisplay.getRealMetrics( realMetrics );
-                nDeviceWidth = realMetrics.widthPixels;
-                nDeviceHeight = realMetrics.heightPixels;
-                // Use densityDpi instead of density to more closely match what the UI scale is
-                density = (float)realMetrics.densityDpi / 160.0f;
-            }
+            DisplayMetrics realMetrics = new DisplayMetrics();
+            mDisplay.getRealMetrics( realMetrics );
+            nDeviceWidth = realMetrics.widthPixels;
+            nDeviceHeight = realMetrics.heightPixels;
+            // Use densityDpi instead of density to more closely match what the UI scale is
+            density = (float)realMetrics.densityDpi / 160.0f;
         } catch(Exception ignored) {
         }
 
@@ -136,6 +184,7 @@ public class SDLSurface extends SurfaceView implements SurfaceHolder.Callback,
         Log.v("SDL", "Window size: " + width + "x" + height);
         Log.v("SDL", "Device size: " + nDeviceWidth + "x" + nDeviceHeight);
         SDLActivity.nativeSetScreenResolution(width, height, nDeviceWidth, nDeviceHeight, density, mDisplay.getRefreshRate());
+        updateHDRHeadroom();
         SDLActivity.onNativeResize();
 
         // Prevent a screen distortion glitch,
@@ -187,6 +236,35 @@ public class SDLSurface extends SurfaceView implements SurfaceHolder.Callback,
         SDLActivity.handleNativeState();
     }
 
+    // Window inset
+    @Override
+    public WindowInsets onApplyWindowInsets(View v, WindowInsets insets) {
+        if (Build.VERSION.SDK_INT >= 30 /* Android 11 (R) */) {
+            Insets combined = insets.getInsets(WindowInsets.Type.systemBars() |
+                                               WindowInsets.Type.systemGestures() |
+                                               WindowInsets.Type.mandatorySystemGestures() |
+                                               WindowInsets.Type.tappableElement() |
+                                               WindowInsets.Type.displayCutout());
+
+            SDLActivity.onNativeInsetsChanged(combined.left, combined.right, combined.top, combined.bottom);
+
+            if (insets.isVisible(WindowInsets.Type.ime())) {
+                if (!mKeyboardVisible) {
+                    mKeyboardVisible = true;
+                    SDLActivity.onNativeScreenKeyboardShown();
+                }
+            } else {
+                if (mKeyboardVisible) {
+                    mKeyboardVisible = false;
+                    SDLActivity.onNativeScreenKeyboardHidden();
+                }
+            }
+        }
+
+        // Pass these to any child views in case they need them
+        return insets;
+    }
+
     // Key events
     @Override
     public boolean onKey(View v, int keyCode, KeyEvent event) {
@@ -218,103 +296,234 @@ public class SDLSurface extends SurfaceView implements SurfaceHolder.Callback,
         int touchDevId = event.getDeviceId();
         final int pointerCount = event.getPointerCount();
         int action = event.getActionMasked();
-        int pointerFingerId;
-        int i = -1;
+        int pointerId;
+        int i = 0;
         float x,y,p;
 
-        // 12290 = Samsung DeX mode desktop mouse
-        // 12290 = 0x3002 = 0x2002 | 0x1002 = SOURCE_MOUSE | SOURCE_TOUCHSCREEN
-        // 0x2   = SOURCE_CLASS_POINTER
-        if (event.getSource() == InputDevice.SOURCE_MOUSE || event.getSource() == (InputDevice.SOURCE_MOUSE | InputDevice.SOURCE_TOUCHSCREEN)) {
-            int mouseButton = 1;
-            try {
-                Object object = event.getClass().getMethod("getButtonState").invoke(event);
-                if (object != null) {
-                    mouseButton = (Integer) object;
+        if (action == MotionEvent.ACTION_POINTER_UP || action == MotionEvent.ACTION_POINTER_DOWN)
+            i = event.getActionIndex();
+
+        do {
+            int toolType = event.getToolType(i);
+
+            if (toolType == MotionEvent.TOOL_TYPE_MOUSE) {
+                int buttonState = event.getButtonState();
+                boolean relative = false;
+
+                // We need to check if we're in relative mouse mode and get the axis offset rather than the x/y values
+                // if we are. We'll leverage our existing mouse motion listener
+                SDLGenericMotionListener_API14 motionListener = SDLActivity.getMotionListener();
+                x = motionListener.getEventX(event, i);
+                y = motionListener.getEventY(event, i);
+                relative = motionListener.inRelativeMode();
+
+                SDLActivity.onNativeMouse(buttonState, action, x, y, relative);                 
+
+            } else if (toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_ERASER) {
+                pointerId = event.getPointerId(i);
+                x = event.getX(i);
+                y = event.getY(i);
+                p = event.getPressure(i);
+                if (p > 1.0f) {
+                    // may be larger than 1.0f on some devices
+                    // see the documentation of getPressure(i)
+                    p = 1.0f;
                 }
-            } catch(Exception ignored) {
+
+                // BUTTON_STYLUS_PRIMARY is 2^5, so shift by 4, and apply SDL_PEN_INPUT_DOWN/SDL_PEN_INPUT_ERASER_TIP
+                int buttonState = (event.getButtonState() >> 4) | (1 << (toolType == MotionEvent.TOOL_TYPE_STYLUS ? 0 : 30));
+                if ((event.getButtonState() & MotionEvent.BUTTON_TERTIARY) != 0) {
+                    buttonState |= 0x08;
+                }
+
+                SDLActivity.onNativePen(pointerId, SDLActivity.getMotionListener().getPenDeviceType(event.getDevice()), buttonState, action, x, y, p);
+            } else { // MotionEvent.TOOL_TYPE_FINGER or MotionEvent.TOOL_TYPE_UNKNOWN
+                pointerId = event.getPointerId(i);
+                x = getNormalizedX(event.getX(i));
+                y = getNormalizedY(event.getY(i));
+                p = event.getPressure(i);
+                if (p > 1.0f) {
+                    // may be larger than 1.0f on some devices
+                    // see the documentation of getPressure(i)
+                    p = 1.0f;
+                }
+
+                SDLActivity.onNativeTouch(touchDevId, pointerId, action, x, y, p);
             }
 
-            // We need to check if we're in relative mouse mode and get the axis offset rather than the x/y values
-            // if we are.  We'll leverage our existing mouse motion listener
-            SDLGenericMotionListener_API12 motionListener = SDLActivity.getMotionListener();
-            x = motionListener.getEventX(event);
-            y = motionListener.getEventY(event);
+            // Non-primary up/down
+            if (action == MotionEvent.ACTION_POINTER_UP || action == MotionEvent.ACTION_POINTER_DOWN)
+                break;
+        } while (++i < pointerCount);
 
-            SDLActivity.onNativeMouse(mouseButton, action, x, y, motionListener.inRelativeMode());
-        } else {
-            switch(action) {
-                case MotionEvent.ACTION_MOVE:
-                    for (i = 0; i < pointerCount; i++) {
-                        pointerFingerId = event.getPointerId(i);
-                        x = getNormalizedX(event.getX(i));
-                        y = getNormalizedY(event.getY(i));
-                        p = event.getPressure(i);
-                        if (p > 1.0f) {
-                            // may be larger than 1.0f on some devices
-                            // see the documentation of getPressure(i)
-                            p = 1.0f;
+        scaleGestureDetector.onTouchEvent(event);
+
+        return true;
+    }
+
+    // HDR state
+    protected float getEstimatedHDRHeadroom() {
+        float headroom = 1.0f;
+
+        // Before Android 15 we can't request HDR headroom for the surface, and
+        // we don't know how HDR content is shown relative to the SDR white level,
+        // so applications can't render HDR content in a meaningful way, so leave
+        // HDR disabled in that case.
+        if (Build.VERSION.SDK_INT < 35 /* Android 15 (V) */) {
+            return headroom;
+        }
+
+        try {
+            Display.HdrCapabilities caps = mDisplay.getHdrCapabilities();
+            if (caps != null) {
+                for (int type : caps.getSupportedHdrTypes()) {
+                    if (type == Display.HdrCapabilities.HDR_TYPE_HDR10) {
+                        // Estimate the headroom from the display peak luminance and the
+                        // BT.2408 reference white. We don't know the actual SDR white level,
+                        // so this is only a rough guess until we've shown HDR content and
+                        // seen how far the display goes above SDR white.
+                        final float SDR_reference_white_nits = 203.0f;
+                        float max_luminance = caps.getDesiredMaxLuminance();
+                        if (max_luminance <= SDR_reference_white_nits) {
+                            // The display didn't report a usable peak luminance
+                            max_luminance = 1000.0f;
                         }
-                        SDLActivity.onNativeTouch(touchDevId, pointerFingerId, action, x, y, p);
+                        headroom = max_luminance / SDR_reference_white_nits;
+                        break;
                     }
-                    break;
+                }
+            }
 
-                case MotionEvent.ACTION_UP:
-                case MotionEvent.ACTION_DOWN:
-                    // Primary pointer up/down, the index is always zero
-                    i = 0;
-                    /* fallthrough */
-                case MotionEvent.ACTION_POINTER_UP:
-                case MotionEvent.ACTION_POINTER_DOWN:
-                    // Non primary pointer up/down
-                    if (i == -1) {
-                        i = event.getActionIndex();
+            if (Build.VERSION.SDK_INT >= 36 /* Android 16 */ && mDisplay.isHdrSdrRatioAvailable()) {
+                float highest = mDisplay.getHighestHdrSdrRatio();
+                if (highest > 1.0f) {
+                    if (headroom > 1.0f) {
+                        // Use the minimum of our estimate and the highest possible headroom
+                        headroom = Math.min(headroom, highest);
+                    } else {
+                        headroom = highest;
                     }
+                }
+            }
+        } catch (Exception ignored) {
+        }
 
-                    pointerFingerId = event.getPointerId(i);
-                    x = getNormalizedX(event.getX(i));
-                    y = getNormalizedY(event.getY(i));
-                    p = event.getPressure(i);
-                    if (p > 1.0f) {
-                        // may be larger than 1.0f on some devices
-                        // see the documentation of getPressure(i)
-                        p = 1.0f;
+        return headroom;
+    }
+
+    protected void updateHDRHeadroom() {
+        float headroom = getEstimatedHDRHeadroom();
+
+        if (mHDRActive && headroom > 1.0f) {
+            try {
+                if (mDisplay.isHdrSdrRatioAvailable()) {
+                    // We're requesting as much headroom as the display can do, so once the
+                    // display has finished ramping up, the HDR/SDR ratio is the headroom that's
+                    // actually available.
+                    //
+                    // Until then, keep reporting the estimate so applications don't see the
+                    // headroom drop to nothing and then ramp back up.
+                    //
+                    // After that, report the ratio even if the display can't currently go above
+                    // the SDR white level, e.g. at maximum brightness, but keep it slightly
+                    // above 1.0 so HDR stays enabled.
+                    float current = mDisplay.getHdrSdrRatio();
+                    if (mHDRMeasured) {
+                        headroom = Math.max(current, 1.01f);
+                    } else {
+                        headroom = Math.max(headroom, current);
                     }
-                    SDLActivity.onNativeTouch(touchDevId, pointerFingerId, action, x, y, p);
-                    break;
-
-                case MotionEvent.ACTION_CANCEL:
-                    for (i = 0; i < pointerCount; i++) {
-                        pointerFingerId = event.getPointerId(i);
-                        x = getNormalizedX(event.getX(i));
-                        y = getNormalizedY(event.getY(i));
-                        p = event.getPressure(i);
-                        if (p > 1.0f) {
-                            // may be larger than 1.0f on some devices
-                            // see the documentation of getPressure(i)
-                            p = 1.0f;
-                        }
-                        SDLActivity.onNativeTouch(touchDevId, pointerFingerId, MotionEvent.ACTION_UP, x, y, p);
-                    }
-                    break;
-
-                default:
-                    break;
+                }
+            } catch (Exception ignored) {
             }
         }
 
-        return true;
-   }
+        // The ratio changes every frame while the display ramps, so only report significant changes until it settles
+        if (mHDRActive && !mHDRStable && mReportedHDRHeadroom > 0.0f &&
+            Math.abs(headroom - mReportedHDRHeadroom) < HDR_RAMP_REPORT_THRESHOLD * mReportedHDRHeadroom) {
+            return;
+        }
+
+        mReportedHDRHeadroom = headroom;
+        SDLActivity.nativeSetScreenHDRHeadroom(headroom);
+    }
+
+    protected void onHDRSDRRatioChanged() {
+        if (mHDRActive) {
+            // Wait for the headroom value to stabilize again
+            mHDRStable = false;
+            removeCallbacks(mHDRStableRunnable);
+            postDelayed(mHDRStableRunnable, HDR_STABLE_DELAY_MS);
+        }
+        updateHDRHeadroom();
+    }
+
+    protected void setDesiredHDRHeadroom(float headroom) {
+        if (Build.VERSION.SDK_INT < 35 /* Android 15 (V) */) {
+            return;
+        }
+
+        // Android only shows content above the SDR white level when more than 1.01 headroom is requested
+        if (headroom > 1.0f && headroom <= 1.01f) {
+            headroom = 1.02f;
+        }
+
+        if (headroom == mDesiredHDRHeadroom) {
+            return;
+        }
+
+        mDesiredHDRHeadroom = headroom;
+        setDesiredHdrHeadroom(headroom);
+
+        boolean active = (headroom > 1.01f);
+        if (active != mHDRActive) {
+            mHDRActive = active;
+            mHDRMeasured = false;
+            mHDRStable = false;
+            removeCallbacks(mHDRStableRunnable);
+            if (active) {
+                postDelayed(mHDRStableRunnable, HDR_STABLE_DELAY_MS);
+            }
+            updateHDRHeadroom();
+        }
+    }
+
+    protected void enableHDRListener(boolean enabled) {
+        if (Build.VERSION.SDK_INT < 35 /* Android 15 (V) */) {
+            return;
+        }
+
+        try {
+            if (enabled) {
+                if (mHdrSdrRatioListener == null && mDisplay.isHdrSdrRatioAvailable()) {
+                    mHdrSdrRatioListener = new Consumer<Display>() {
+                        @Override
+                        public void accept(Display display) {
+                            onHDRSDRRatioChanged();
+                        }
+                    };
+                    mDisplay.registerHdrSdrRatioChangedListener(getContext().getMainExecutor(), mHdrSdrRatioListener);
+                }
+            } else {
+                if (mHdrSdrRatioListener != null) {
+                    mDisplay.unregisterHdrSdrRatioChangedListener(mHdrSdrRatioListener);
+                    mHdrSdrRatioListener = null;
+                }
+                removeCallbacks(mHDRStableRunnable);
+            }
+        } catch (Exception ignored) {
+        }
+    }
 
     // Sensor events
-    public void enableSensor(int sensortype, boolean enabled) {
+    protected void enableSensor(int sensortype, boolean enabled) {
         // TODO: This uses getDefaultSensor - what if we have >1 accels?
         if (enabled) {
-            mSensorManager.registerListener(this,
+            SDLSensorManager.registerListener(mSensorManager, this,
                             mSensorManager.getDefaultSensor(sensortype),
-                            SensorManager.SENSOR_DELAY_GAME, null);
+                            SensorManager.SENSOR_DELAY_GAME);
         } else {
-            mSensorManager.unregisterListener(this,
+            SDLSensorManager.unregisterListener(mSensorManager, this,
                             mSensorManager.getDefaultSensor(sensortype));
         }
     }
@@ -361,53 +570,50 @@ public class SDLSurface extends SurfaceView implements SurfaceHolder.Callback,
                 SDLActivity.mCurrentRotation = newRotation;
                 SDLActivity.onNativeRotationChanged(newRotation);
             }
+        }
+    }
 
-            SDLActivity.onNativeAccel(-x / SensorManager.GRAVITY_EARTH,
-                                      y / SensorManager.GRAVITY_EARTH,
-                                      event.values[2] / SensorManager.GRAVITY_EARTH);
-
-
+    // Prevent android internal NullPointerException (https://github.com/libsdl-org/SDL/issues/13306)
+    @Override
+    public PointerIcon onResolvePointerIcon(MotionEvent event, int pointerIndex) {
+        try {
+            return super.onResolvePointerIcon(event, pointerIndex);
+        } catch (NullPointerException e) {
+            return null;
         }
     }
 
     // Captured pointer events for API 26.
+    @Override
     public boolean onCapturedPointerEvent(MotionEvent event)
     {
-        int action = event.getActionMasked();
-
-        float x, y;
-        switch (action) {
-            case MotionEvent.ACTION_SCROLL:
-                x = event.getAxisValue(MotionEvent.AXIS_HSCROLL, 0);
-                y = event.getAxisValue(MotionEvent.AXIS_VSCROLL, 0);
-                SDLActivity.onNativeMouse(0, action, x, y, false);
-                return true;
-
-            case MotionEvent.ACTION_HOVER_MOVE:
-            case MotionEvent.ACTION_MOVE:
-                x = event.getX(0);
-                y = event.getY(0);
-                SDLActivity.onNativeMouse(0, action, x, y, true);
-                return true;
-
-            case MotionEvent.ACTION_BUTTON_PRESS:
-            case MotionEvent.ACTION_BUTTON_RELEASE:
-
-                // Change our action value to what SDL's code expects.
-                if (action == MotionEvent.ACTION_BUTTON_PRESS) {
-                    action = MotionEvent.ACTION_DOWN;
-                } else { /* MotionEvent.ACTION_BUTTON_RELEASE */
-                    action = MotionEvent.ACTION_UP;
-                }
-
-                x = event.getX(0);
-                y = event.getY(0);
-                int button = event.getButtonState();
-
-                SDLActivity.onNativeMouse(button, action, x, y, true);
-                return true;
-        }
-
-        return false;
+        return SDLActivity.getMotionListener().onGenericMotion(this, event);
     }
+
+    @Override
+    public boolean onScale(ScaleGestureDetector detector) {
+        float scale = detector.getScaleFactor();
+        float span_x = getNormalizedX(detector.getCurrentSpanX());
+        float span_y = getNormalizedY(detector.getCurrentSpanY());
+        float focus_x = getNormalizedX(detector.getFocusX());
+        float focus_y = getNormalizedY(detector.getFocusY());
+        SDLActivity.onNativePinchUpdate(scale, span_x, span_y, focus_x, focus_y);
+        return true;
+    }
+
+    @Override
+    public boolean onScaleBegin(ScaleGestureDetector detector) {
+        float span_x = getNormalizedX(detector.getCurrentSpanX());
+        float span_y = getNormalizedY(detector.getCurrentSpanY());
+        float focus_x = getNormalizedX(detector.getFocusX());
+        float focus_y = getNormalizedY(detector.getFocusY());
+        SDLActivity.onNativePinchStart(span_x, span_y, focus_x, focus_y);
+        return true;
+    }
+
+    @Override
+    public void onScaleEnd(ScaleGestureDetector detector) {
+        SDLActivity.onNativePinchEnd();
+    }
+
 }

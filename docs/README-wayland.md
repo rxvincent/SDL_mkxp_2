@@ -22,15 +22,49 @@ encounter limitations or behavior that is different from other windowing systems
   if a plugin to generate native-looking decorations is not installed (i.e. the GTK plugin), the decorations will not
   appear to be 'native'.
 
+### Border insets for client-side decorations
+
+- Applications drawing client-side decorations (shadows or invisible resize borders) can declare their insets via the
+  `SDL_PROP_WINDOW_WAYLAND_BORDER_INSET_*` window properties when the window is created with the
+  `SDL_PROP_WINDOW_CREATE_WAYLAND_ENABLE_INSETS_BOOLEAN` property set to `true`. SDL then sets the xdg window geometry
+  to the surface minus the insets (in points, regardless of pixel density) and translates configure sizes and size
+  limits accordingly. Maximized and fullscreen windows are always sized exactly as configured, while tiled windows keep
+  their insets. Changes take effect on the next configure. Only xdg-toplevel windows are affected; popup and custom-role
+  surfaces ignore the properties, as does libdecor, which manages the window geometry itself (see
+  `SDL_HINT_VIDEO_WAYLAND_ALLOW_LIBDECOR`). Note that in certain cases, compositors may ignore the min and max size
+  hints, as well as the non-resizable state on windows. When this occurs and insets are enabled, SDL can't mask around
+  the main surface or use scaled viewports to compensate, so clients are responsible for handling this behavior
+  themselves.
+
+
 ### Windows do not appear immediately after creation
 
 - Wayland requires that the application initially present a buffer before the window becomes visible. Additionally,
   applications _must_ have an event loop and processes messages on a regular basis, or the application can appear
   unresponsive to both the user and desktop compositor.
 
+### The display reported as the primary by ```SDL_GetPrimaryDisplay()``` is incorrect
+
+- Wayland doesn't natively have the concept of a primary display, so SDL attempts to determine it by querying various
+  system settings, and falling back to a selection algorithm if this fails. If it is incorrect, it can be manually
+  overridden by setting the ```SDL_VIDEO_DISPLAY_PRIORITY``` hint.
+
 ### ```SDL_SetWindowPosition()``` doesn't work on non-popup windows
 
 - Wayland does not allow toplevel windows to position themselves programmatically.
+
+### How do I save and restore window layout and state between runs?
+
+- To preserve the state of toplevel windows across runs, the `xdg-session-management-v1` protocol is required:
+  - Create a session by setting the `SDL_PROP_GLOBAL_VIDEO_WAYLAND_SESSION_ID_STRING` property to a non-null value
+    before creating a window.
+  - Assign the windows you want managed by the session a unique, stable ID string with the
+    `SDL_PROP_WINDOW_CREATE_WAYLAND_WINDOW_ID_STRING` property at creation time. This string should be human-readable,
+    but not translated.
+  - Serialize the session ID property `SDL_PROP_GLOBAL_VIDEO_WAYLAND_SESSION_ID_STRING` before shutting down.
+  - On subsequent runs, restore the session ID string property to the previously serialized value before window
+    creation. This property may change at some arbitrary point during runtime, so serialization should be deferred as
+    late as possible.
 
 ### Retrieving the global mouse cursor position when the cursor is outside a window doesn't work
 
@@ -41,17 +75,37 @@ encounter limitations or behavior that is different from other windowing systems
 
 ### Warping the mouse cursor to or from a point outside the window doesn't work
 
-- The cursor can be warped only within the window with mouse focus, provided that the `zwp_pointer_confinement_v1`
-  protocol is supported by the compositor.
+- Warping the cursor on Wayland requires that either the `wp_pointer_warp_v1` or `zwp_pointer_confinement_v1` protocol
+  is supported by the compositor. Compositors typically restrict pointer warps to be within the window that currently
+  has mouse focus.
+
+### Minimize/Restored window events are not sent, and the ```SDL_WINDOW_MINIMIZED``` flag is not set.
+
+- Wayland windows do not currently report the minimized state, aside from when it is activated programmatically via
+  ```SDL_MinimizeWindow()```. Minimizing a window from the window controls or a desktop shortcut will not send a
+  minimized event or flag the window as being minimized.
 
 ### The application icon can't be set via ```SDL_SetWindowIcon()```
 
-- Wayland doesn't support programmatically setting the application icon. To provide a custom icon for your application,
-  you must create an associated desktop entry file, aka a `.desktop` file, that points to the icon image. Please see the
-  [Desktop Entry Specification](https://specifications.freedesktop.org/desktop-entry-spec/latest/) for more information
-  on the format of this file. Note that if your application manually sets the application ID via the `SDL_APP_ID` hint
-  string, the desktop entry file name should match the application ID. For example, if your application ID is set
-  to `org.my_org.sdl_app`, the desktop entry file should be named `org.my_org.sdl_app.desktop`.
+- Wayland requires compositor support for the `xdg-toplevel-icon-v1` protocol to set window icons programmatically.
+  Otherwise, the launcher icon from the associated desktop entry file, aka a `.desktop` file, will typically be used.
+  Please see the [Desktop Entry Specification](https://specifications.freedesktop.org/desktop-entry-spec/latest/) for
+  more information on the format of this file. Note that if your application manually sets the application ID via the
+  `SDL_APP_ID` hint string, the desktop entry file name should match the application ID. For example, if your
+  application ID is set to `org.my_org.sdl_app`, the desktop entry file should be named `org.my_org.sdl_app.desktop`.
+
+### The application progress bar can't be set via ```SDL_SetWindowProgressState()``` or ```SDL_SetWindowProgressValue()```
+
+- Only some Desktop Environments support the underlying API. Known compatible DEs: Unity, KDE
+- The underlying API requires a desktop entry file, aka a `.desktop` file.
+  Please see the [Desktop Entry Specification](https://specifications.freedesktop.org/desktop-entry-spec/latest/) for
+  more information on the format of this file. Note that if your application manually sets the application ID via the
+  `SDL_APP_ID` hint string, the desktop entry file name should match the application ID. For example, if your
+  application ID is set to `org.my_org.sdl_app`, the desktop entry file should be named `org.my_org.sdl_app.desktop`.
+
+### Keyboard grabs don't work when running under XWayland
+
+- On GNOME based desktops, the dconf setting `org/gnome/mutter/wayland/xwayland-allow-grabs` must be enabled.
 
 ## Using custom Wayland windowing protocols with SDL windows
 
@@ -61,7 +115,7 @@ having SDL handle input and rendering, it needs to create a custom, roleless sur
 toplevel window.
 
 This is done by using `SDL_CreateWindowWithProperties()` and setting the
-`SDL_PROP_WINDOW_CREATE_WAYLAND_SURFACE_ROLE_CUSTOM_BOOLEAN` property to `SDL_TRUE`. Once the window has been
+`SDL_PROP_WINDOW_CREATE_WAYLAND_SURFACE_ROLE_CUSTOM_BOOLEAN` property to `true`. Once the window has been
 successfully created, the `wl_display` and `wl_surface` objects can then be retrieved from the
 `SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER` and `SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER` properties respectively.
 
@@ -69,10 +123,10 @@ Surfaces don't receive any size change notifications, so if an application chang
 that the surface size has changed by calling SDL_SetWindowSize() with the new dimensions.
 
 Custom surfaces will automatically handle scaling internally if the window was created with the
-`SDL_PROP_WINDOW_CREATE_HIGH_PIXEL_DENSITY_BOOLEAN` property set to `SDL_TRUE`. In this case, applications should
+`SDL_PROP_WINDOW_CREATE_HIGH_PIXEL_DENSITY_BOOLEAN` property set to `true`. In this case, applications should
 not manually attach viewports or change the surface scale value, as SDL will handle this internally. Calls
 to `SDL_SetWindowSize()` should use the logical size of the window, and `SDL_GetWindowSizeInPixels()` should be used to
-query the size of the backbuffer surface in pixels. If this property is not set or is `SDL_FALSE`, applications can
+query the size of the backbuffer surface in pixels. If this property is not set or is `false`, applications can
 attach their own viewports or change the surface scale manually, and the SDL backend will not interfere or change any
 values internally. In this case, calls to `SDL_SetWindowSize()` should pass the requested surface size in pixels, not
 the logical window size, as no scaling calculations will be done internally.
@@ -101,7 +155,7 @@ SDL receives no notification regarding size changes on external surfaces or topl
 needs to be resized, SDL must be informed by calling SDL_SetWindowSize() with the new dimensions.
 
 If desired, SDL can automatically handle the scaling for the surface by setting the
-`SDL_PROP_WINDOW_CREATE_HIGH_PIXEL_DENSITY_BOOLEAN` property to `SDL_TRUE`, however, if the surface being imported
+`SDL_PROP_WINDOW_CREATE_HIGH_PIXEL_DENSITY_BOOLEAN` property to `true`, however, if the surface being imported
 already has, or will have, a viewport/fractional scale manager attached to it by the application or an external toolkit,
 a protocol violation will result. Avoid setting this property if importing surfaces from toolkits such as Qt or GTK.
 
@@ -153,7 +207,7 @@ int main(int argc, char *argv[])
     }
 
     /* Set SDL to use the existing wl_display object from Qt and initialize. */
-    SDL_SetProperty(SDL_GetGlobalProperties(), SDL_PROP_GLOBAL_VIDEO_WAYLAND_WL_DISPLAY_POINTER, display);
+    SDL_SetPointerProperty(SDL_GetGlobalProperties(), SDL_PROP_GLOBAL_VIDEO_WAYLAND_WL_DISPLAY_POINTER, display);
     SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
 
     /* Create a basic, frameless QWindow */
@@ -175,8 +229,8 @@ int main(int argc, char *argv[])
      * Qt objects should not be flagged as DPI-aware or protocol violations will result.
      */
     props = SDL_CreateProperties();
-    SDL_SetProperty(props, SDL_PROP_WINDOW_CREATE_WAYLAND_WL_SURFACE_POINTER, surface);
-    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_OPENGL_BOOLEAN, SDL_TRUE);
+    SDL_SetPointerProperty(props, SDL_PROP_WINDOW_CREATE_WAYLAND_WL_SURFACE_POINTER, surface);
+    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_OPENGL_BOOLEAN, true);
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, 640);
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, 480);
     sdlWindow = SDL_CreateWindowWithProperties(props);
@@ -194,7 +248,7 @@ int main(int argc, char *argv[])
     /* Draw a blue screen for the window until ESC is pressed or the window is no longer visible. */
     while (!done) {
         while (SDL_PollEvent(&e)) {
-            if (e.type == SDL_EVENT_KEY_DOWN && e.key.keysym.sym == SDLK_ESCAPE) {
+            if (e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_ESCAPE) {
                 done = 1;
             }
         }
@@ -206,7 +260,7 @@ int main(int argc, char *argv[])
         SDL_SetWindowSize(sdlWindow, SDL_lround(640. * scale), SDL_lround(480. * scale));
 
         if (qtWindow.isVisible()) {
-            SDL_SetRenderDrawColor(sdlRenderer, 0, 0, 255, 255);
+            SDL_SetRenderDrawColor(sdlRenderer, 0, 0, 255, SDL_ALPHA_OPAQUE);
             SDL_RenderClear(sdlRenderer);
             SDL_RenderPresent(sdlRenderer);
         } else {

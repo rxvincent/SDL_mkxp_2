@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2024 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -23,7 +23,9 @@
 #ifdef SDL_FILESYSTEM_UNIX
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-/* System dependent filesystem routines                                */
+// System dependent filesystem routines
+
+#include "../SDL_sysfilesystem.h"
 
 #include <stdio.h>
 #include <sys/stat.h>
@@ -40,50 +42,55 @@
 #include <sys/sysctl.h>
 #endif
 
+#if defined(SDL_PLATFORM_QNXNTO)
+#include <process.h>
+#endif
+
 static char *readSymLink(const char *path)
 {
-    char *retval = NULL;
+    char *result = NULL;
     ssize_t len = 64;
     ssize_t rc = -1;
 
     while (1) {
-        char *ptr = (char *)SDL_realloc(retval, (size_t)len);
+        char *ptr = (char *)SDL_realloc(result, (size_t)len);
         if (!ptr) {
             break;
         }
 
-        retval = ptr;
+        result = ptr;
 
-        rc = readlink(path, retval, len);
+        rc = readlink(path, result, len);
         if (rc == -1) {
-            break; /* not a symlink, i/o error, etc. */
+            break; // not a symlink, i/o error, etc.
         } else if (rc < len) {
-            retval[rc] = '\0'; /* readlink doesn't null-terminate. */
-            return retval;     /* we're good to go. */
+            result[rc] = '\0'; // readlink doesn't null-terminate.
+            return result;     // we're good to go.
         }
 
-        len *= 2; /* grow buffer, try again. */
+        len *= 2; // grow buffer, try again.
     }
 
-    SDL_free(retval);
+    SDL_free(result);
     return NULL;
 }
 
-#ifdef SDL_PLATFORM_OPENBSD
+#if defined(SDL_PLATFORM_OPENBSD) && !defined(HAVE_GETEXECPATH)
 static char *search_path_for_binary(const char *bin)
 {
-    char *envr = SDL_getenv("PATH");
+    const char *envr_real = SDL_getenv("PATH");
+    char *envr;
     size_t alloc_size;
     char *exe = NULL;
-    char *start = envr;
+    char *start;
     char *ptr;
 
-    if (!envr) {
+    if (!envr_real) {
         SDL_SetError("No $PATH set");
         return NULL;
     }
 
-    envr = SDL_strdup(envr);
+    start = envr = SDL_strdup(envr_real);
     if (!envr) {
         return NULL;
     }
@@ -94,48 +101,57 @@ static char *search_path_for_binary(const char *bin)
     exe = (char *)SDL_malloc(alloc_size);
 
     do {
-        ptr = SDL_strchr(start, ':'); /* find next $PATH separator. */
+        ptr = SDL_strchr(start, ':'); // find next $PATH separator.
         if (ptr != start) {
             if (ptr) {
                 *ptr = '\0';
             }
 
-            /* build full binary path... */
+            // build full binary path...
             SDL_snprintf(exe, alloc_size, "%s%s%s", start, (ptr && (ptr[-1] == '/')) ? "" : "/", bin);
 
-            if (access(exe, X_OK) == 0) { /* Exists as executable? We're done. */
+            if (access(exe, X_OK) == 0) { // Exists as executable? We're done.
                 SDL_free(envr);
                 return exe;
             }
         }
-        start = ptr + 1; /* start points to beginning of next element. */
+        start = ptr + 1; // start points to beginning of next element.
     } while (ptr);
 
     SDL_free(envr);
     SDL_free(exe);
 
     SDL_SetError("Process not found in $PATH");
-    return NULL; /* doesn't exist in path. */
+    return NULL; // doesn't exist in path.
 }
 #endif
 
-char *SDL_GetBasePath(void)
+static char *GetExePath(void)
 {
-    char *retval = NULL;
+    char *result = NULL;
 
 #ifdef SDL_PLATFORM_FREEBSD
     char fullpath[PATH_MAX];
     size_t buflen = sizeof(fullpath);
     const int mib[] = { CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, -1 };
     if (sysctl(mib, SDL_arraysize(mib), fullpath, &buflen, NULL, 0) != -1) {
-        retval = SDL_strdup(fullpath);
-        if (!retval) {
+        result = SDL_strdup(fullpath);
+        if (!result) {
             return NULL;
         }
     }
 #endif
 #ifdef SDL_PLATFORM_OPENBSD
-    /* Please note that this will fail if the process was launched with a relative path and $PWD + the cwd have changed, or argv is altered. So don't do that. Or add a new sysctl to OpenBSD. */
+#ifdef HAVE_GETEXECPATH
+    char fullpath[PATH_MAX];
+    if (getexecpath(fullpath, sizeof(fullpath)) == 0) {
+        result = SDL_strdup(fullpath);
+        if (!result) {
+            return NULL;
+        }
+    }
+#else
+    // Please note that this will fail if the process was launched with a relative path and $PWD + the cwd have changed, or argv is altered. So don't do that. Or add a new sysctl to OpenBSD.
     char **cmdline;
     size_t len;
     const int mib[] = { CTL_KERN, KERN_PROC_ARGS, getpid(), KERN_PROC_ARGV };
@@ -156,7 +172,7 @@ char *SDL_GetBasePath(void)
 
         exe = cmdline[0];
         pwddst = NULL;
-        if (SDL_strchr(exe, '/') == NULL) { /* not a relative or absolute path, check $PATH for it */
+        if (SDL_strchr(exe, '/') == NULL) { // not a relative or absolute path, check $PATH for it
             exe = search_path_for_binary(cmdline[0]);
         } else {
             if (exe && *exe == '.') {
@@ -170,11 +186,11 @@ char *SDL_GetBasePath(void)
         if (exe) {
             if (!pwddst) {
                 if (realpath(exe, realpathbuf) != NULL) {
-                    retval = realpathbuf;
+                    result = realpathbuf;
                 }
             } else {
                 if (realpath(pwddst, realpathbuf) != NULL) {
-                    retval = realpathbuf;
+                    result = realpathbuf;
                 }
                 SDL_free(pwddst);
             }
@@ -184,46 +200,52 @@ char *SDL_GetBasePath(void)
             }
         }
 
-        if (!retval) {
+        if (!result) {
             SDL_free(realpathbuf);
         }
 
         SDL_free(cmdline);
     }
 #endif
+#endif
 
-    /* is a Linux-style /proc filesystem available? */
-    if (!retval && (access("/proc", F_OK) == 0)) {
+    // is a Linux-style /proc filesystem available?
+    if (!result && (access("/proc", F_OK) == 0)) {
         /* !!! FIXME: after 2.0.6 ships, let's delete this code and just
                       use the /proc/%llu version. There's no reason to have
                       two copies of this plus all the #ifdefs. --ryan. */
 #ifdef SDL_PLATFORM_FREEBSD
-        retval = readSymLink("/proc/curproc/file");
+        result = readSymLink("/proc/curproc/file");
 #elif defined(SDL_PLATFORM_NETBSD)
-        retval = readSymLink("/proc/curproc/exe");
+        result = readSymLink("/proc/curproc/exe");
 #elif defined(SDL_PLATFORM_SOLARIS)
-        retval = readSymLink("/proc/self/path/a.out");
+        result = readSymLink("/proc/self/path/a.out");
+#elif defined(SDL_PLATFORM_QNXNTO)
+        char exe_path[PATH_MAX];
+        if (_cmdname(exe_path) != NULL) {
+            result = SDL_strdup(exe_path);
+        }
 #else
-        retval = readSymLink("/proc/self/exe"); /* linux. */
-        if (!retval) {
-            /* older kernels don't have /proc/self ... try PID version... */
+        result = readSymLink("/proc/self/exe"); // linux.
+        if (!result) {
+            // older kernels don't have /proc/self ... try PID version...
             char path[64];
             const int rc = SDL_snprintf(path, sizeof(path),
                                         "/proc/%llu/exe",
                                         (unsigned long long)getpid());
             if ((rc > 0) && (rc < sizeof(path))) {
-                retval = readSymLink(path);
+                result = readSymLink(path);
             }
         }
 #endif
     }
 
-#ifdef SDL_PLATFORM_SOLARIS  /* try this as a fallback if /proc didn't pan out */
-    if (!retval) {
+#ifdef SDL_PLATFORM_SOLARIS  // try this as a fallback if /proc didn't pan out
+    if (!result) {
         const char *path = getexecname();
-        if ((path) && (path[0] == '/')) { /* must be absolute path... */
-            retval = SDL_strdup(path);
-            if (!retval) {
+        if ((path) && (path[0] == '/')) { // must be absolute path...
+            result = SDL_strdup(path);
+            if (!result) {
                 return NULL;
             }
         }
@@ -232,28 +254,43 @@ char *SDL_GetBasePath(void)
     /* If we had access to argv[0] here, we could check it for a path,
         or troll through $PATH looking for it, too. */
 
-    if (retval) { /* chop off filename. */
-        char *ptr = SDL_strrchr(retval, '/');
-        if (ptr) {
-            *(ptr + 1) = '\0';
-        } else { /* shouldn't happen, but just in case... */
-            SDL_free(retval);
-            retval = NULL;
-        }
-    }
-
-    if (retval) {
-        /* try to shrink buffer... */
-        char *ptr = (char *)SDL_realloc(retval, SDL_strlen(retval) + 1);
-        if (ptr) {
-            retval = ptr; /* oh well if it failed. */
-        }
-    }
-
-    return retval;
+    return result;
 }
 
-char *SDL_GetPrefPath(const char *org, const char *app)
+char *SDL_SYS_GetBasePath(void)
+{
+    char *path = GetExePath();
+    if (!path) {
+        return NULL;
+    }
+
+    char *ptr = SDL_strrchr(path, '/');
+    SDL_assert(ptr != NULL);  // Should have been an absolute path.
+
+    ptr[1] = '\0'; // chop off filename, leave '/'.
+
+    ptr = (char *) SDL_realloc(path, ((size_t) (ptr - path)) + 2);  // try to shrink this allocation down a little.
+    return ptr ? ptr : path;  // return shrunk buffer if shrink worked out, unchanged original buffer if not.
+}
+
+
+char *SDL_SYS_GetExeName(void)
+{
+    char *path = GetExePath();
+    if (!path) {
+        return NULL;
+    }
+
+    char *ptr = SDL_strrchr(path, '/');
+    SDL_assert(ptr != NULL);  // Should have been an absolute path.
+    const size_t slen = SDL_strlen(ptr);  // counts null terminator because we're still sitting on path separator.
+    SDL_memmove(path, ptr + 1, slen);  // move filename string to start of SDL_realloc'd region.
+    ptr = (char *) SDL_realloc(path, slen);  // try to shrink this allocation down a little.
+    return ptr ? ptr : path;  // return shrunk buffer if shrink worked out, unchanged original buffer if not.
+}
+
+
+char *SDL_SYS_GetPrefPath(const char *org, const char *app)
 {
     /*
      * We use XDG's base directory spec, even if you're not on Linux.
@@ -263,66 +300,78 @@ char *SDL_GetPrefPath(const char *org, const char *app)
      * http://standards.freedesktop.org/basedir-spec/basedir-spec-latest.html
      */
     const char *envr = SDL_getenv("XDG_DATA_HOME");
-    const char *append;
-    char *retval = NULL;
+    const char *prepend;
+    char *result = NULL;
     char *ptr = NULL;
-    size_t len = 0;
 
-    if (!app) {
-        SDL_InvalidParamError("app");
-        return NULL;
-    }
-    if (!org) {
+#ifdef SDL_PLATFORM_LINUX
+    if (SDL_IsUbuntuTouch()) {
+        // On Ubuntu Touch, the only allowed data folder is:
+        //     ~/.local/share/<app id>/
+
+        SDL_PropertiesID props = SDL_GetGlobalProperties();
+        if (!props) {
+            return NULL;
+        }
+
+        const char *appid = SDL_GetStringProperty(props, SDL_PROP_GLOBAL_SYSTEM_UBUNTU_TOUCH_APPID_STRING, NULL);
+        if (!appid) {
+            SDL_SetError("Ubuntu Touch App ID missing from global properties");
+            return NULL;
+        }
+
+        app = appid;
         org = "";
     }
+#endif
 
     if (!envr) {
-        /* You end up with "$HOME/.local/share/Game Name 2" */
+        // You end up with "$HOME/.local/share/Game Name 2"
         envr = SDL_getenv("HOME");
         if (!envr) {
-            /* we could take heroic measures with /etc/passwd, but oh well. */
+            // we could take heroic measures with /etc/passwd, but oh well.
             SDL_SetError("neither XDG_DATA_HOME nor HOME environment is set");
             return NULL;
         }
-        append = "/.local/share/";
+        prepend = "/.local/share/";
     } else {
-        append = "/";
+        prepend = "/";
     }
 
-    len = SDL_strlen(envr);
+    size_t len = SDL_strlen(envr);
     if (envr[len - 1] == '/') {
-        append += 1;
+        prepend += 1;
     }
 
-    len += SDL_strlen(append) + SDL_strlen(org) + SDL_strlen(app) + 3;
-    retval = (char *)SDL_malloc(len);
-    if (!retval) {
+    len += SDL_strlen(prepend) + SDL_strlen(org) + SDL_strlen(app) + 3;
+    result = (char *)SDL_malloc(len);
+    if (!result) {
         return NULL;
     }
 
     if (*org) {
-        (void)SDL_snprintf(retval, len, "%s%s%s/%s/", envr, append, org, app);
+        (void)SDL_snprintf(result, len, "%s%s%s/%s/", envr, prepend, org, app);
     } else {
-        (void)SDL_snprintf(retval, len, "%s%s%s/", envr, append, app);
+        (void)SDL_snprintf(result, len, "%s%s%s/", envr, prepend, app);
     }
 
-    for (ptr = retval + 1; *ptr; ptr++) {
+    for (ptr = result + 1; *ptr; ptr++) {
         if (*ptr == '/') {
             *ptr = '\0';
-            if (mkdir(retval, 0700) != 0 && errno != EEXIST) {
+            if (mkdir(result, 0700) != 0 && errno != EEXIST) {
                 goto error;
             }
             *ptr = '/';
         }
     }
-    if (mkdir(retval, 0700) != 0 && errno != EEXIST) {
+    if (mkdir(result, 0700) != 0 && errno != EEXIST) {
     error:
-        SDL_SetError("Couldn't create directory '%s': '%s'", retval, strerror(errno));
-        SDL_free(retval);
+        SDL_SetError("Couldn't create directory '%s': '%s'", result, strerror(errno));
+        SDL_free(result);
         return NULL;
     }
 
-    return retval;
+    return result;
 }
 
 /*
@@ -356,7 +405,8 @@ char *SDL_GetPrefPath(const char *org, const char *app)
 static char *xdg_user_dir_lookup_with_fallback (const char *type, const char *fallback)
 {
   FILE *file;
-  char *home_dir, *config_home, *config_file;
+  const char *home_dir, *config_home;
+  char *config_file;
   char buffer[512];
   char *user_dir;
   char *p, *d;
@@ -364,16 +414,16 @@ static char *xdg_user_dir_lookup_with_fallback (const char *type, const char *fa
   int relative;
   size_t l;
 
-  home_dir = SDL_getenv ("HOME");
+  home_dir = SDL_getenv("HOME");
 
   if (!home_dir)
     goto error;
 
-  config_home = SDL_getenv ("XDG_CONFIG_HOME");
+  config_home = SDL_getenv("XDG_CONFIG_HOME");
   if (!config_home || config_home[0] == 0)
     {
       l = SDL_strlen (home_dir) + SDL_strlen ("/.config/user-dirs.dirs") + 1;
-      config_file = (char*) SDL_malloc (l);
+      config_file = (char *)SDL_malloc (l);
       if (!config_file)
         goto error;
 
@@ -383,7 +433,7 @@ static char *xdg_user_dir_lookup_with_fallback (const char *type, const char *fa
   else
     {
       l = SDL_strlen (config_home) + SDL_strlen ("/user-dirs.dirs") + 1;
-      config_file = (char*) SDL_malloc (l);
+      config_file = (char *)SDL_malloc (l);
       if (!config_file)
         goto error;
 
@@ -399,7 +449,7 @@ static char *xdg_user_dir_lookup_with_fallback (const char *type, const char *fa
   user_dir = NULL;
   while (fgets (buffer, sizeof (buffer), file))
     {
-      /* Remove newline at end */
+      // Remove newline at end
       len = SDL_strlen (buffer);
       if (len > 0 && buffer[len-1] == '\n')
         buffer[len-1] = 0;
@@ -445,7 +495,7 @@ static char *xdg_user_dir_lookup_with_fallback (const char *type, const char *fa
       if (relative)
         {
           l = SDL_strlen (home_dir) + 1 + SDL_strlen (p) + 1;
-          user_dir = (char*) SDL_malloc (l);
+          user_dir = (char *)SDL_malloc (l);
           if (!user_dir)
             goto error2;
 
@@ -454,7 +504,7 @@ static char *xdg_user_dir_lookup_with_fallback (const char *type, const char *fa
         }
       else
         {
-          user_dir = (char*) SDL_malloc (SDL_strlen (p) + 1);
+          user_dir = (char *)SDL_malloc (SDL_strlen (p) + 1);
           if (!user_dir)
             goto error2;
 
@@ -484,7 +534,8 @@ error2:
 
 static char *xdg_user_dir_lookup (const char *type)
 {
-    char *dir, *home_dir, *user_dir;
+    const char *home_dir;
+    char *dir, *user_dir;
 
     dir = xdg_user_dir_lookup_with_fallback(type, NULL);
     if (dir)
@@ -495,10 +546,10 @@ static char *xdg_user_dir_lookup (const char *type)
     if (!home_dir)
         return NULL;
 
-    /* Special case desktop for historical compatibility */
+    // Special case desktop for historical compatibility
     if (SDL_strcmp(type, "DESKTOP") == 0) {
         size_t length = SDL_strlen(home_dir) + SDL_strlen("/Desktop") + 1;
-        user_dir = (char*) SDL_malloc(length);
+        user_dir = (char *)SDL_malloc(length);
         if (!user_dir)
             return NULL;
 
@@ -510,11 +561,11 @@ static char *xdg_user_dir_lookup (const char *type)
     return NULL;
 }
 
-char *SDL_GetUserFolder(SDL_Folder folder)
+char *SDL_SYS_GetUserFolder(SDL_Folder folder)
 {
     const char *param = NULL;
-    char *retval;
-    char *newretval;
+    char *result;
+    char *newresult;
 
     /* According to `man xdg-user-dir`, the possible values are:
         DESKTOP
@@ -535,7 +586,7 @@ char *SDL_GetUserFolder(SDL_Folder folder)
             return NULL;
         }
 
-        retval = SDL_strdup(param);
+        result = SDL_strdup(param);
         goto append_slash;
 
     case SDL_FOLDER_DESKTOP:
@@ -589,25 +640,25 @@ char *SDL_GetUserFolder(SDL_Folder folder)
         return NULL;
     }
 
-    retval = xdg_user_dir_lookup(param);
+    result = xdg_user_dir_lookup(param);
 
-    if (!retval) {
+    if (!result) {
         SDL_SetError("XDG directory not available");
         return NULL;
     }
 
 append_slash:
-    newretval = (char *) SDL_realloc(retval, SDL_strlen(retval) + 2);
+    newresult = (char *) SDL_realloc(result, SDL_strlen(result) + 2);
 
-    if (!newretval) {
-        SDL_free(retval);
+    if (!newresult) {
+        SDL_free(result);
         return NULL;
     }
 
-    retval = newretval;
-    SDL_strlcat(retval, "/", SDL_strlen(retval) + 2);
+    result = newresult;
+    SDL_strlcat(result, "/", SDL_strlen(result) + 2);
 
-    return retval;
+    return result;
 }
 
-#endif /* SDL_FILESYSTEM_UNIX */
+#endif // SDL_FILESYSTEM_UNIX

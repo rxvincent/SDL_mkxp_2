@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2024 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -20,16 +20,17 @@
 */
 #include "SDL_internal.h"
 
-/* D3D11 shader implementation */
+// D3D11 shader implementation
 
 typedef enum
 {
     SHADER_NONE,
     SHADER_SOLID,
+    SHADER_SOLID_PQ,
     SHADER_RGB,
     SHADER_ADVANCED,
     NUM_SHADERS
 } D3D11_Shader;
 
-extern int D3D11_CreateVertexShader(ID3D11Device1 *d3dDevice, ID3D11VertexShader **vertexShader, ID3D11InputLayout **inputLayout);
-extern int D3D11_CreatePixelShader(ID3D11Device1 *d3dDevice, D3D11_Shader shader, ID3D11PixelShader **pixelShader);
+extern bool D3D11_CreateVertexShader(ID3D11Device1 *d3dDevice, ID3D11VertexShader **vertexShader, ID3D11InputLayout **inputLayout);
+extern bool D3D11_CreatePixelShader(ID3D11Device1 *d3dDevice, D3D11_Shader shader, ID3D11PixelShader **pixelShader);

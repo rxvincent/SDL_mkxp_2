@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2024 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -20,10 +20,9 @@
 */
 #include "SDL_internal.h"
 
-#ifndef SDL_PLATFORM_WINRT
-
 #include "SDL_hid.h"
 
+HidD_GetAttributes_t SDL_HidD_GetAttributes;
 HidD_GetString_t SDL_HidD_GetManufacturerString;
 HidD_GetString_t SDL_HidD_GetProductString;
 HidP_GetCaps_t SDL_HidP_GetCaps;
@@ -36,22 +35,23 @@ static HMODULE s_pHIDDLL = 0;
 static int s_HIDDLLRefCount = 0;
 
 
-int WIN_LoadHIDDLL(void)
+bool WIN_LoadHIDDLL(void)
 {
     if (s_pHIDDLL) {
         SDL_assert(s_HIDDLLRefCount > 0);
         s_HIDDLLRefCount++;
-        return 0; /* already loaded */
+        return true; // already loaded
     }
 
     s_pHIDDLL = LoadLibrary(TEXT("hid.dll"));
     if (!s_pHIDDLL) {
-        return -1;
+        return false;
     }
 
     SDL_assert(s_HIDDLLRefCount == 0);
     s_HIDDLLRefCount = 1;
 
+    SDL_HidD_GetAttributes = (HidD_GetAttributes_t)GetProcAddress(s_pHIDDLL, "HidD_GetAttributes");
     SDL_HidD_GetManufacturerString = (HidD_GetString_t)GetProcAddress(s_pHIDDLL, "HidD_GetManufacturerString");
     SDL_HidD_GetProductString = (HidD_GetString_t)GetProcAddress(s_pHIDDLL, "HidD_GetProductString");
     SDL_HidP_GetCaps = (HidP_GetCaps_t)GetProcAddress(s_pHIDDLL, "HidP_GetCaps");
@@ -63,10 +63,10 @@ int WIN_LoadHIDDLL(void)
         !SDL_HidP_GetCaps || !SDL_HidP_GetButtonCaps ||
         !SDL_HidP_GetValueCaps || !SDL_HidP_MaxDataListLength || !SDL_HidP_GetData) {
         WIN_UnloadHIDDLL();
-        return -1;
+        return false;
     }
 
-    return 0;
+    return true;
 }
 
 void WIN_UnloadHIDDLL(void)
@@ -82,11 +82,9 @@ void WIN_UnloadHIDDLL(void)
     }
 }
 
-#endif /* !SDL_PLATFORM_WINRT */
+#if !defined(SDL_PLATFORM_XBOXONE) && !defined(SDL_PLATFORM_XBOXSERIES)
 
-#if !defined(SDL_PLATFORM_WINRT) && !defined(SDL_PLATFORM_XBOXONE) && !defined(SDL_PLATFORM_XBOXSERIES)
-
-/* CM_Register_Notification definitions */
+// CM_Register_Notification definitions
 
 #define CR_SUCCESS 0
 
@@ -169,20 +167,68 @@ typedef DWORD (CALLBACK *PCM_NOTIFY_CALLBACK)(HCMNOTIFICATION hNotify, PVOID Con
 typedef DWORD (WINAPI *CM_Register_NotificationFunc)(PCM_NOTIFY_FILTER pFilter, PVOID pContext, PCM_NOTIFY_CALLBACK pCallback, PHCMNOTIFICATION pNotifyContext);
 typedef DWORD (WINAPI *CM_Unregister_NotificationFunc)(HCMNOTIFICATION NotifyContext);
 
+#define CM_NOTIFY_FILTER_FLAG_ALL_INTERFACE_CLASSES 0x00000001
+
 static GUID GUID_DEVINTERFACE_HID = { 0x4D1E55B2L, 0xF16F, 0x11CF, { 0x88, 0xCB, 0x00, 0x11, 0x11, 0x00, 0x00, 0x30 } };
 
+static SDL_InitState SDL_cfgmgr32_init;
+static CM_Register_NotificationFunc SDL_CM_Register_Notification;
+static CM_Unregister_NotificationFunc SDL_CM_Unregister_Notification;
+
 static int s_DeviceNotificationsRequested;
-static HMODULE cfgmgr32_lib_handle;
-static CM_Register_NotificationFunc CM_Register_Notification;
-static CM_Unregister_NotificationFunc CM_Unregister_Notification;
 static HCMNOTIFICATION s_DeviceNotificationFuncHandle;
 static Uint64 s_LastDeviceNotification = 1;
+static HANDLE s_HotplugEvent = INVALID_HANDLE_VALUE;
+static SDL_AtomicInt s_HotplugRunning;
+static SDL_Thread *s_HotplugThread;
+
+static bool WIN_LoadCfgMgr32(void)
+{
+    if (SDL_ShouldInit(&SDL_cfgmgr32_init)) {
+        // We'll keep this loaded for future use
+        HMODULE cfgmgr32 = LoadLibraryA("cfgmgr32.dll");
+        if (cfgmgr32) {
+            SDL_CM_Register_Notification = (CM_Register_NotificationFunc)GetProcAddress(cfgmgr32, "CM_Register_Notification");
+            SDL_CM_Unregister_Notification = (CM_Unregister_NotificationFunc)GetProcAddress(cfgmgr32, "CM_Unregister_Notification");
+        }
+        SDL_SetInitialized(&SDL_cfgmgr32_init, true);
+    }
+
+    if (!SDL_CM_Register_Notification || !SDL_CM_Unregister_Notification) {
+        return false;
+    }
+    return true;
+}
+
+#ifdef SDL_VIDEO_DRIVER_WINDOWS
+// Defined in SDL_windowsevents.c
+extern void WIN_CheckKeyboardAndMouseHotplug(bool hid_loaded);
+#endif
+
+static int SDLCALL DeviceHotplugThread(void *unused)
+{
+    bool hid_loaded = WIN_LoadHIDDLL();
+
+    // Always run the initial device detection
+    do {
+#ifdef SDL_VIDEO_DRIVER_WINDOWS
+        WIN_CheckKeyboardAndMouseHotplug(hid_loaded);
+#endif
+        WaitForSingleObject(s_HotplugEvent, INFINITE);
+    } while (SDL_GetAtomicInt(&s_HotplugRunning));
+
+    if (hid_loaded) {
+        WIN_UnloadHIDDLL();
+    }
+    return 0;
+}
 
 static DWORD CALLBACK SDL_DeviceNotificationFunc(HCMNOTIFICATION hNotify, PVOID context, CM_NOTIFY_ACTION action, PCM_NOTIFY_EVENT_DATA eventData, DWORD event_data_size)
 {
     if (action == CM_NOTIFY_ACTION_DEVICEINTERFACEARRIVAL ||
         action == CM_NOTIFY_ACTION_DEVICEINTERFACEREMOVAL) {
         s_LastDeviceNotification = SDL_GetTicksNS();
+        SetEvent(s_HotplugEvent);
     }
     return ERROR_SUCCESS;
 }
@@ -194,20 +240,20 @@ void WIN_InitDeviceNotification(void)
         return;
     }
 
-    cfgmgr32_lib_handle = LoadLibraryA("cfgmgr32.dll");
-    if (cfgmgr32_lib_handle) {
-        CM_Register_Notification = (CM_Register_NotificationFunc)GetProcAddress(cfgmgr32_lib_handle, "CM_Register_Notification");
-        CM_Unregister_Notification = (CM_Unregister_NotificationFunc)GetProcAddress(cfgmgr32_lib_handle, "CM_Unregister_Notification");
-        if (CM_Register_Notification && CM_Unregister_Notification) {
-            CM_NOTIFY_FILTER notify_filter;
+    // Start the device hotplug thread
+    SDL_SetAtomicInt(&s_HotplugRunning, true);
+    s_HotplugEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
+    s_HotplugThread = SDL_CreateThread(DeviceHotplugThread, "DeviceHotplugThread", NULL);
 
-            SDL_zero(notify_filter);
-            notify_filter.cbSize = sizeof(notify_filter);
-            notify_filter.FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE;
-            notify_filter.u.DeviceInterface.ClassGuid = GUID_DEVINTERFACE_HID;
-            if (CM_Register_Notification(&notify_filter, NULL, SDL_DeviceNotificationFunc, &s_DeviceNotificationFuncHandle) == CR_SUCCESS) {
-                return;
-            }
+    if (WIN_LoadCfgMgr32()) {
+        CM_NOTIFY_FILTER notify_filter;
+
+        SDL_zero(notify_filter);
+        notify_filter.cbSize = sizeof(notify_filter);
+        notify_filter.FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE;
+        notify_filter.u.DeviceInterface.ClassGuid = GUID_DEVINTERFACE_HID;
+        if (SDL_CM_Register_Notification(&notify_filter, NULL, SDL_DeviceNotificationFunc, &s_DeviceNotificationFuncHandle) == CR_SUCCESS) {
+            return;
         }
     }
 
@@ -219,22 +265,76 @@ Uint64 WIN_GetLastDeviceNotification(void)
     return s_LastDeviceNotification;
 }
 
+struct WIN_DeviceInterfaceNotification
+{
+    HCMNOTIFICATION handle;
+    WIN_DeviceInterfaceCallback callback;
+    void *userdata;
+};
+
+static DWORD CALLBACK WIN_DeviceInterfaceNotificationFunc(HCMNOTIFICATION hNotify, PVOID context, CM_NOTIFY_ACTION action, PCM_NOTIFY_EVENT_DATA eventData, DWORD event_data_size)
+{
+    WIN_DeviceInterfaceNotification *notification = (WIN_DeviceInterfaceNotification *)context;
+
+    if (action == CM_NOTIFY_ACTION_DEVICEINTERFACEARRIVAL ||
+        action == CM_NOTIFY_ACTION_DEVICEINTERFACEREMOVAL) {
+        notification->callback(notification->userdata);
+    }
+    return ERROR_SUCCESS;
+}
+
+WIN_DeviceInterfaceNotification *WIN_RegisterDeviceInterfaceNotification(WIN_DeviceInterfaceCallback callback, void *userdata)
+{
+    WIN_DeviceInterfaceNotification *notification;
+    CM_NOTIFY_FILTER notify_filter;
+
+    if (!WIN_LoadCfgMgr32()) {
+        return NULL;
+    }
+
+    notification = (WIN_DeviceInterfaceNotification *)SDL_calloc(1, sizeof(*notification));
+    if (!notification) {
+        return NULL;
+    }
+    notification->callback = callback;
+    notification->userdata = userdata;
+
+    SDL_zero(notify_filter);
+    notify_filter.cbSize = sizeof(notify_filter);
+    notify_filter.Flags = CM_NOTIFY_FILTER_FLAG_ALL_INTERFACE_CLASSES;
+    notify_filter.FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE;
+    if (SDL_CM_Register_Notification(&notify_filter, notification, WIN_DeviceInterfaceNotificationFunc, &notification->handle) != CR_SUCCESS) {
+        SDL_free(notification);
+        return NULL;
+    }
+    return notification;
+}
+
+void WIN_UnregisterDeviceInterfaceNotification(WIN_DeviceInterfaceNotification *notification)
+{
+    if (notification) {
+        SDL_CM_Unregister_Notification(notification->handle);
+        SDL_free(notification);
+    }
+}
+
 void WIN_QuitDeviceNotification(void)
 {
     if (--s_DeviceNotificationsRequested > 0) {
         return;
     }
-    /* Make sure we have balanced calls to init/quit */
+    // Make sure we have balanced calls to init/quit
     SDL_assert(s_DeviceNotificationsRequested == 0);
 
-    if (cfgmgr32_lib_handle) {
-        if (s_DeviceNotificationFuncHandle && CM_Unregister_Notification) {
-            CM_Unregister_Notification(s_DeviceNotificationFuncHandle);
-            s_DeviceNotificationFuncHandle = NULL;
-        }
+    // Stop the device hotplug thread
+    SDL_SetAtomicInt(&s_HotplugRunning, false);
+    SetEvent(s_HotplugEvent);
+    SDL_WaitThread(s_HotplugThread, NULL);
+    s_HotplugThread = NULL;
 
-        FreeLibrary(cfgmgr32_lib_handle);
-        cfgmgr32_lib_handle = NULL;
+    if (s_DeviceNotificationFuncHandle) {
+        SDL_CM_Unregister_Notification(s_DeviceNotificationFuncHandle);
+        s_DeviceNotificationFuncHandle = NULL;
     }
 }
 
@@ -253,4 +353,13 @@ void WIN_QuitDeviceNotification(void)
 {
 }
 
-#endif // !SDL_PLATFORM_WINRT && !SDL_PLATFORM_XBOXONE && !SDL_PLATFORM_XBOXSERIES
+WIN_DeviceInterfaceNotification *WIN_RegisterDeviceInterfaceNotification(WIN_DeviceInterfaceCallback callback, void *userdata)
+{
+    return NULL;
+}
+
+void WIN_UnregisterDeviceInterfaceNotification(WIN_DeviceInterfaceNotification *notification)
+{
+}
+
+#endif // !SDL_PLATFORM_XBOXONE && !SDL_PLATFORM_XBOXSERIES

@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2024 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -24,6 +24,8 @@
 
 #include "SDL_internal.h"
 
+struct SDL_VideoDevice;
+
 /**
  * Initialize the video subsystem, optionally specifying a video driver.
  *
@@ -32,35 +34,36 @@
  * pixel formats, but does not initialize a window or graphics mode.
  *
  * If you use this function and you haven't used the SDL_INIT_VIDEO flag with
- * either SDL_Init() or SDL_InitSubSystem(), you should call SDL_VideoQuit()
+ * either SDL_Init() or SDL_InitSubSystem(), you should call SDL_QuitVideo()
  * before calling SDL_Quit().
  *
- * It is safe to call this function multiple times. SDL_VideoInit() will call
- * SDL_VideoQuit() itself if the video subsystem has already been initialized.
+ * It is safe to call this function multiple times. SDL_InitVideo() will call
+ * SDL_QuitVideo() itself if the video subsystem has already been initialized.
  *
  * You can use SDL_GetNumVideoDrivers() and SDL_GetVideoDriver() to find a
  * specific `driver_name`.
  *
  * \param driver_name the name of a video driver to initialize, or NULL for
  *                    the default driver
- * \returns 0 on success or a negative error code on failure; call
+ * \returns true on success or false on failure; call
  *          SDL_GetError() for more information.
  */
-extern int SDL_VideoInit(const char *driver_name);
+extern bool SDL_InitVideo(const char *driver_name);
 
 /**
- * Shut down the video subsystem, if initialized with SDL_VideoInit().
+ * Shut down the video subsystem, if initialized with SDL_InitVideo().
  *
  * This function closes all windows, and restores the original video mode.
  */
-extern void SDL_VideoQuit(void);
+extern void SDL_QuitVideo(void);
 
-extern int SDL_SetWindowTextureVSync(SDL_Window *window, int vsync);
-
-extern int SDL_ReadSurfacePixel(SDL_Surface *surface, int x, int y, Uint8 *r, Uint8 *g, Uint8 *b, Uint8 *a);
+extern bool SDL_SetWindowTextureVSync(struct SDL_VideoDevice *_this, SDL_Window *window, int vsync);
 
 #if defined(SDL_VIDEO_DRIVER_X11) || defined(SDL_VIDEO_DRIVER_WAYLAND) || defined(SDL_VIDEO_DRIVER_EMSCRIPTEN)
 const char *SDL_GetCSSCursorName(SDL_SystemCursor id, const char **fallback_name);
 #endif
 
-#endif /* SDL_video_c_h_ */
+extern bool SDL_AddWindowRenderer(SDL_Window *window, SDL_Renderer *renderer);
+extern void SDL_RemoveWindowRenderer(SDL_Window *window, SDL_Renderer *renderer);
+
+#endif // SDL_video_c_h_

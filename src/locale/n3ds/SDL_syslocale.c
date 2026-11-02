@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2024 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -24,22 +24,24 @@
 
 #include <3ds.h>
 
-/* Used when the CFGU fails to work. */
+// Used when the CFGU fails to work.
 #define BAD_LOCALE 255
 
 static u8 GetLocaleIndex(void);
 
-int SDL_SYS_GetPreferredLocales(char *buf, size_t buflen)
+bool SDL_SYS_GetPreferredLocales(char *buf, size_t buflen)
 {
-    /* The 3DS only supports these 12 languages, only one can be active at a time */
+    // The 3DS only supports these 12 languages, only one can be active at a time
     static const char AVAILABLE_LOCALES[][6] = { "ja_JP", "en_US", "fr_FR", "de_DE",
                                                  "it_IT", "es_ES", "zh_CN", "ko_KR",
                                                  "nl_NL", "pt_PT", "ru_RU", "zh_TW" };
-    u8 current_locale = GetLocaleIndex();
-    if (current_locale != BAD_LOCALE) {
-        SDL_strlcpy(buf, AVAILABLE_LOCALES[current_locale], buflen);
+    const u8 current_locale = GetLocaleIndex();
+    if ((current_locale == BAD_LOCALE) || (current_locale >= SDL_arraysize(AVAILABLE_LOCALES))) {
+        return SDL_SetError("Could not obtain system locale");
     }
-    return 0;
+
+    SDL_strlcpy(buf, AVAILABLE_LOCALES[current_locale], buflen);
+    return true;
 }
 
 static u8 GetLocaleIndex(void)

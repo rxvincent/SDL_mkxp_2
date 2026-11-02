@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2024 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -20,12 +20,13 @@
 */
 #include "SDL_internal.h"
 
-#if SDL_VIDEO_RENDER_VULKAN
+#ifdef SDL_VIDEO_RENDER_VULKAN
 
 #include "SDL_shaders_vulkan.h"
 
-/* The shaders here were compiled with compile_shaders.bat */
+// The shaders here were compiled with compile_shaders.bat
 #include "VULKAN_PixelShader_Colors.h"
+#include "VULKAN_PixelShader_Colors_PQ.h"
 #include "VULKAN_PixelShader_Textures.h"
 #include "VULKAN_PixelShader_Advanced.h"
 #include "VULKAN_VertexShader.h"
@@ -38,6 +39,8 @@ static struct
     size_t vs_shader_size;
 } VULKAN_shaders[NUM_SHADERS] = {
     { VULKAN_PixelShader_Colors, sizeof(VULKAN_PixelShader_Colors),
+      VULKAN_VertexShader, sizeof(VULKAN_VertexShader) },
+    { VULKAN_PixelShader_Colors_PQ, sizeof(VULKAN_PixelShader_Colors_PQ),
       VULKAN_VertexShader, sizeof(VULKAN_VertexShader) },
     { VULKAN_PixelShader_Textures, sizeof(VULKAN_PixelShader_Textures),
       VULKAN_VertexShader, sizeof(VULKAN_VertexShader) },
@@ -57,4 +60,4 @@ void VULKAN_GetPixelShader(VULKAN_Shader shader, const uint32_t **outBytecode, s
     *outSize = VULKAN_shaders[shader].ps_shader_size;
 }
 
-#endif /* SDL_VIDEO_RENDER_VULKAN */
+#endif // SDL_VIDEO_RENDER_VULKAN

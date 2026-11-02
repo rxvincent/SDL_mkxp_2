@@ -2,7 +2,7 @@
 // Distributed under BSD 3-Clause License
 #include "SDL_internal.h"
 
-#if SDL_HAVE_YUV
+#ifdef SDL_HAVE_YUV
 
 #include "yuv_rgb_internal.h"
 
@@ -35,6 +35,18 @@ static uint16_t clamp10(int32_t v)
         return 0;
     } else if (v > 1023) {
         return 1023;
+    } else {
+        return (uint16_t)v;
+    }
+}
+
+static uint16_t clamp16(int32_t v)
+{
+    v >>= PRECISION;
+    if (v < 0) {
+        return 0;
+    } else if (v > 0xffff) {
+        return 0xffff;
     } else {
         return (uint16_t)v;
     }
@@ -102,6 +114,26 @@ static uint16_t clamp10(int32_t v)
 #define RGB_FORMAT			RGB_FORMAT_ABGR
 #include "yuv_rgb_std_func.h"
 
+#define STD_FUNCTION_NAME	yuv444_rgba_std
+#define YUV_FORMAT			YUV_FORMAT_444
+#define RGB_FORMAT			RGB_FORMAT_RGBA
+#include "yuv_rgb_std_func.h"
+
+#define STD_FUNCTION_NAME	yuv444_bgra_std
+#define YUV_FORMAT			YUV_FORMAT_444
+#define RGB_FORMAT			RGB_FORMAT_BGRA
+#include "yuv_rgb_std_func.h"
+
+#define STD_FUNCTION_NAME	yuv444_argb_std
+#define YUV_FORMAT			YUV_FORMAT_444
+#define RGB_FORMAT			RGB_FORMAT_ARGB
+#include "yuv_rgb_std_func.h"
+
+#define STD_FUNCTION_NAME	yuv444_abgr_std
+#define YUV_FORMAT			YUV_FORMAT_444
+#define RGB_FORMAT			RGB_FORMAT_ABGR
+#include "yuv_rgb_std_func.h"
+
 #define STD_FUNCTION_NAME	yuvnv12_rgb565_std
 #define YUV_FORMAT			YUV_FORMAT_NV12
 #define RGB_FORMAT			RGB_FORMAT_RGB565
@@ -138,6 +170,19 @@ static uint16_t clamp10(int32_t v)
 #define STD_FUNCTION_NAME	yuvp010_xbgr2101010_std
 #define YUV_FORMAT			YUV_FORMAT_NV12
 #define RGB_FORMAT			RGB_FORMAT_XBGR2101010
+#include "yuv_rgb_std_func.h"
+
+#undef YUV_BITS
+#define YUV_BITS    16
+
+#define STD_FUNCTION_NAME	yuvi0fl_rgb48_std
+#define YUV_FORMAT			YUV_FORMAT_420
+#define RGB_FORMAT			RGB_FORMAT_RGB48
+#include "yuv_rgb_std_func.h"
+
+#define STD_FUNCTION_NAME	yuvi4fl_rgb48_std
+#define YUV_FORMAT			YUV_FORMAT_444
+#define RGB_FORMAT			RGB_FORMAT_RGB48
 #include "yuv_rgb_std_func.h"
 
 void rgb24_yuv420_std(

@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2024 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
   Copyright (C) 2018-2019 EXL <exlmotodev@gmail.com>
 
   This software is provided 'as-is', without any express or implied
@@ -25,7 +25,7 @@
 #ifdef SDL_VIDEO_DRIVER_HAIKU
 
 
-/* For application signature. */
+// For application signature.
 #include "../../core/haiku/SDL_BeApp.h"
 
 #include <Alert.h>
@@ -324,7 +324,7 @@ protected:
 	}
 
 	virtual void
-	SetTitle(const char* aTitle)
+	SetTitle(const char *aTitle)
 	{
 		fTitle = aTitle;
 		BAlert::SetTitle(aTitle);
@@ -335,7 +335,7 @@ protected:
 extern "C" {
 #endif
 
-int HAIKU_ShowMessageBox(const SDL_MessageBoxData *messageboxdata, int *buttonID)
+bool HAIKU_ShowMessageBox(const SDL_MessageBoxData *messageboxdata, int *buttonID)
 {
 	// Initialize button by closed or error value first.
 	*buttonID = G_CLOSE_BUTTON_ID;
@@ -373,11 +373,11 @@ int HAIKU_ShowMessageBox(const SDL_MessageBoxData *messageboxdata, int *buttonID
 	// Initialize button by real pushed value then.
 	*buttonID = pushedButton;
 
-	return 0;
+	return true;
 }
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* SDL_VIDEO_DRIVER_HAIKU */
+#endif // SDL_VIDEO_DRIVER_HAIKU

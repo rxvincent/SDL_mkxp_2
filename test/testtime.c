@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 1997-2024 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -46,7 +46,7 @@ static void RenderDateTime(SDL_Renderer *r)
 
     /* Query the current time and print it. */
     SDL_GetCurrentTime(&ticks);
-    SDL_TimeToDateTime(ticks, &dt, SDL_FALSE);
+    SDL_TimeToDateTime(ticks, &dt, false);
 
     switch (date_format) {
     case SDL_DATE_FORMAT_YYYYMMDD:
@@ -78,7 +78,7 @@ static void RenderDateTime(SDL_Renderer *r)
 
     SDLTest_DrawString(r, 10, 15, str);
 
-    SDL_TimeToDateTime(ticks, &dt, SDL_TRUE);
+    SDL_TimeToDateTime(ticks, &dt, true);
     if (time_format) {
         if (dt.hour > 12) { /* PM */
             dt.hour -= 12;
@@ -154,9 +154,6 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    /* Enable standard application logging */
-    SDL_SetLogPriority(SDL_LOG_CATEGORY_APPLICATION, SDL_LOG_PRIORITY_INFO);
-
     /* Parse commandline */
     if (!SDLTest_CommonDefaultArgs(state, argc, argv)) {
         return 1;
@@ -176,7 +173,7 @@ int main(int argc, char *argv[])
         while (SDL_PollEvent(&event)) {
             SDLTest_CommonEvent(state, &event, &done);
             if (event.type == SDL_EVENT_KEY_DOWN) {
-                switch (event.key.keysym.sym) {
+                switch (event.key.key) {
                 case SDLK_UP:
                     if (++cal_month > 12) {
                         cal_month = 1;
@@ -221,6 +218,7 @@ int main(int argc, char *argv[])
     }
 
 quit:
+    SDLTest_CleanupTextDrawing();
     SDLTest_CommonQuit(state);
     return 0;
 }

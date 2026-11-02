@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2024 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -29,6 +29,12 @@
 /* NOTE: DO NOT CHANGE THIS ALGORITHM
    There is code that relies on this in the joystick code
 */
+/* If you're looking for a faster CRC32 implementation,
+   the crc32() in zlib is a convenient option.
+
+   This is also Zlib licensed and extremely fast:
+       https://github.com/corsix/fast-crc32
+*/
 
 static Uint32 crc32_for_byte(Uint32 r)
 {
@@ -41,7 +47,7 @@ static Uint32 crc32_for_byte(Uint32 r)
 
 Uint32 SDL_crc32(Uint32 crc, const void *data, size_t len)
 {
-    /* As an optimization we can precalculate a 256 entry table for each byte */
+    // As an optimization we can precalculate a 256 entry table for each byte
     size_t i;
     for (i = 0; i < len; ++i) {
         crc = crc32_for_byte((Uint8)crc ^ ((const Uint8 *)data)[i]) ^ crc >> 8;

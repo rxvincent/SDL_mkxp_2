@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2024 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -26,6 +26,9 @@
 #ifdef SDL_VIDEO_VULKAN
 #ifdef SDL_VIDEO_DRIVER_ANDROID
 #define VK_USE_PLATFORM_ANDROID_KHR
+#endif
+#ifdef SDL_VIDEO_DRIVER_OPENHARMONY
+#define VK_USE_PLATFORM_OHOS
 #endif
 #ifdef SDL_VIDEO_DRIVER_COCOA
 #define VK_USE_PLATFORM_METAL_EXT
@@ -57,16 +60,16 @@ extern const char *SDL_Vulkan_GetResultString(VkResult result);
 
 extern VkExtensionProperties *SDL_Vulkan_CreateInstanceExtensionsList(
     PFN_vkEnumerateInstanceExtensionProperties vkEnumerateInstanceExtensionProperties,
-    Uint32 *extensionCount); /* free returned list with SDL_free */
+    Uint32 *extensionCount); // free returned list with SDL_free
 
 /* Create a surface directly from a display connected to a physical device
  * using the DisplayKHR extension.
  * This needs to be passed an instance that was created with the VK_KHR_DISPLAY_EXTENSION_NAME
  * extension. */
-extern SDL_bool SDL_Vulkan_Display_CreateSurface(void *vkGetInstanceProcAddr,
-                                                 VkInstance instance,
-                                                 const struct VkAllocationCallbacks *allocator,
-                                                 VkSurfaceKHR *surface);
+extern bool SDL_Vulkan_Display_CreateSurface(void *vkGetInstanceProcAddr,
+                                             VkInstance instance,
+                                             const struct VkAllocationCallbacks *allocator,
+                                             VkSurfaceKHR *surface);
 
 /* Platform independent base function for destroying the Vulkan surface. Unlike surface
  * creation, surface destruction doesn't require platform specific extensions like
@@ -80,12 +83,12 @@ extern void SDL_Vulkan_DestroySurface_Internal(void *vkGetInstanceProcAddr,
                                                const struct VkAllocationCallbacks *allocator);
 #else
 
-/* No SDL Vulkan support, just include the header for typedefs */
+// No SDL Vulkan support, just include the header for typedefs
 #include <SDL3/SDL_vulkan.h>
 
 typedef void (*PFN_vkGetInstanceProcAddr)(void);
 typedef int (*PFN_vkEnumerateInstanceExtensionProperties)(void);
 
-#endif /* SDL_VIDEO_VULKAN */
+#endif // SDL_VIDEO_VULKAN
 
-#endif /* SDL_vulkan_internal_h_ */
+#endif // SDL_vulkan_internal_h_

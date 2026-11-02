@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2024 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -22,12 +22,13 @@
 
 #ifdef SDL_TIME_PSP
 
+#include <psptypes.h>
 #include <psprtc.h>
 #include <psputility_sysparam.h>
 
 #include "../SDL_time_c.h"
 
-/* Sony seems to use 0001-01-01T00:00:00 as an epoch. */
+// Sony seems to use 0001-01-01T00:00:00 as an epoch.
 #define DELTA_EPOCH_0001_OFFSET 62135596800ULL
 
 void SDL_GetSystemTimeLocalePreferences(SDL_DateFormat *df, SDL_TimeFormat *tf)
@@ -64,11 +65,11 @@ void SDL_GetSystemTimeLocalePreferences(SDL_DateFormat *df, SDL_TimeFormat *tf)
     }
 }
 
-int SDL_GetCurrentTime(SDL_Time *ticks)
+bool SDL_GetCurrentTime(SDL_Time *ticks)
 {
     u64 sceTicks;
 
-    if (!ticks) {
+    CHECK_PARAM(!ticks) {
         return SDL_InvalidParamError("ticks");
     }
 
@@ -81,29 +82,37 @@ int SDL_GetCurrentTime(SDL_Time *ticks)
         const Uint64 scetime_min = (Uint64)((SDL_MIN_TIME / div) + epoch_offset);
         const Uint64 scetime_max = (Uint64)((SDL_MAX_TIME / div) + epoch_offset);
 
-        /* Clamp to the valid SDL_Time range. */
+        // Clamp to the valid SDL_Time range.
         sceTicks = SDL_clamp(sceTicks, scetime_min, scetime_max);
 
         *ticks = (SDL_Time)(sceTicks - epoch_offset) * div;
 
-        return 0;
+        return true;
     }
 
     return SDL_SetError("Failed to retrieve system time (%i)", ret);
 }
 
-int SDL_TimeToDateTime(SDL_Time ticks, SDL_DateTime *dt, SDL_bool localTime)
+bool SDL_TimeToDateTime(SDL_Time ticks, SDL_DateTime *dt, bool localTime)
 {
     ScePspDateTime t;
     u64 local;
     int ret = 0;
 
-    if (!dt) {
+    CHECK_PARAM(!dt) {
         return SDL_InvalidParamError("dt");
     }
 
     const u32 res = sceRtcGetTickResolution();
     const u32 div = (SDL_NS_PER_SECOND / res);
+    int rem_ns = (int)(ticks % SDL_NS_PER_SECOND);
+    if (rem_ns < 0) {
+        // Prevent rounding errors if the remaining nanoseconds are less than one unit of system time.
+        if (-rem_ns < (int)div) {
+            ticks -= (int)div;
+        }
+        rem_ns += SDL_NS_PER_SECOND;
+    }
     const u64 sceTicks = (u64)((ticks / div) + (DELTA_EPOCH_0001_OFFSET * div));
 
     if (localTime) {
@@ -121,16 +130,16 @@ int SDL_TimeToDateTime(SDL_Time ticks, SDL_DateTime *dt, SDL_bool localTime)
             dt->hour = t.hour;
             dt->minute = t.minute;
             dt->second = t.second;
-            dt->nanosecond = ticks % SDL_NS_PER_SECOND;
+            dt->nanosecond = rem_ns;
             dt->utc_offset = (int)(((Sint64)local - (Sint64)sceTicks) / (Sint64)res);
 
             SDL_CivilToDays(dt->year, dt->month, dt->day, &dt->day_of_week, NULL);
 
-            return 0;
+            return true;
         }
     }
 
     return SDL_SetError("Local time conversion failed (%i)", ret);
 }
 
-#endif /* SDL_TIME_PSP */
+#endif // SDL_TIME_PSP
